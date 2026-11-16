@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tephra</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<!-- The Devices workspace: setting up and watching the hardware. What the displays show is the Screens workspace (/). -->
+<header class="topbar">
+  <a class="brand" href="/">tephra</a>
+  <div class="workspaces" role="navigation" aria-label="Workspaces">
+    <a href="/" title="What each display shows">Screens</a>
+    <a class="current" href="/devices" aria-current="true">Devices</a>
+  </div>
+  <nav aria-label="Pages">
+    <a href="#/devices" data-page="devices">Devices</a>
+    <a href="#/log" data-page="log">Log</a>
+  </nav>
+  <div class="status" id="status"></div>
+</header>
+<div class="banner bad" id="offline" hidden>The server cannot be reached. This page shows what it last received, and keeps trying.</div>
+<div class="banner bad" id="problem" hidden><span></span></div>
+
+<main>
+<!-- ---- Devices: every device that has called in; select one for its details ---- -->
+<section id="page-devices">
+  <div class="split">
+    <div class="list-pane">
+      <div class="panel">
+        <div class="panel-head"><h2>Devices</h2><span class="spacer"></span><button type="button" class="small" id="add-device">Add placeholder</button></div>
+        <ul class="list" id="device-list" aria-label="Devices"></ul>
+      </div>
+    </div>
+    <div id="device-detail"><div id="device-facts"></div><div id="device-form-box"></div></div>
+  </div>
+</section>
+
+<!-- ---- Log: what the devices reported, and the server's own events ---- -->
+<section id="page-log" hidden>
+  <div class="page-head"><h1>Log</h1><span class="muted">Newest first. Devices upload only their errors.</span></div>
+  <div class="panel"><div class="panel-body flush scroll-x" id="log-body"></div></div>
+</section>
+</main>
+
+<footer class="foot">
+  <span id="foot-server"></span>
+  <label>Theme <select id="theme"><option value="">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
+</footer>
+
+<script src="/static/ui.js"></script>
+<script src="/static/devices.js"></script>
+</body>
+</html>

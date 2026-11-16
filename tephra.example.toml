@@ -1,0 +1,19 @@
+# tephra configuration. Every setting is optional; these are the defaults.
+# Copy to tephra.toml and run: tephra -c tephra.toml
+
+# Where the web UI and the device API listen (one port for both).
+# 8374 spells "TEPH" on a phone keypad.
+listen = "0.0.0.0:8374"
+
+# How devices reach this server, e.g. "http://192.168.1.10:8374". Image URLs handed to
+# devices are built from it. When empty, it is taken from each request's Host header.
+public_url = ""
+
+# The database and rendered images.
+data_dir = "data"
+
+# One directory per app, each with an app.lua.
+apps_dir = "apps"
+
+# IANA timezone that apps see, e.g. "America/Los_Angeles". Empty means the system's.
+timezone = ""

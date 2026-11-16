@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tephra</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<!-- The Screens workspace: what each display shows. Setting up the hardware is the Devices workspace (/devices). -->
+<header class="topbar">
+  <a class="brand" href="/">tephra</a>
+  <div class="workspaces" role="navigation" aria-label="Workspaces">
+    <a class="current" href="/" aria-current="true">Screens</a>
+    <a href="/devices" title="Device setup, log and settings">Devices</a>
+  </div>
+  <nav aria-label="Pages">
+    <a href="#/screens" data-page="screens">Screens</a>
+    <a href="#/apps" data-page="apps">Apps</a>
+  </nav>
+  <div class="status" id="status"></div>
+</header>
+<div class="banner bad" id="offline" hidden>The server cannot be reached. This page shows what it last received, and keeps trying.</div>
+<div class="banner bad" id="problem" hidden><span></span></div>
+
+<main>
+<!-- ---- Screens: one per device; the preview, its layout, and the app in each slot ---- -->
+<section id="page-screens">
+  <div class="split">
+    <div class="list-pane">
+      <div class="panel">
+        <div class="panel-head"><h2>Screens</h2></div>
+        <ul class="list" id="screen-list" aria-label="Screens"></ul>
+      </div>
+    </div>
+    <div id="screen-editor"></div>
+  </div>
+</section>
+
+<!-- ---- Apps: what is installed, and each app's instances ---- -->
+<section id="page-apps" hidden>
+  <div class="page-head">
+    <h1>Apps</h1>
+    <span class="spacer"></span>
+    <button type="button" id="apps-reload" title="Read the apps directory again">Reload apps</button>
+  </div>
+  <div id="apps-body"></div>
+</section>
+</main>
+
+<footer class="foot">
+  <span id="foot-server"></span>
+  <label>Theme <select id="theme"><option value="">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
+</footer>
+
+<script src="/static/ui.js"></script>
+<script src="/static/screens.js"></script>
+</body>
+</html>

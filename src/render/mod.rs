@@ -126,10 +126,18 @@ impl Canvas {
     /// Draws a grayscale image (0 black .. 255 white) at (x, y), dithered (Atkinson) or
     /// thresholded to the canvas's grays.
     pub fn draw_gray(&mut self, img: &image::GrayImage, x: i32, y: i32, dither: bool) {
+        self.draw_gray_masked(img, None, x, y, dither)
+    }
+
+    /// `draw_gray`, leaving the canvas as it is where `mask` (the same size) is below 128.
+    pub fn draw_gray_masked(&mut self, img: &image::GrayImage, mask: Option<&image::GrayImage>, x: i32, y: i32, dither: bool) {
         let (iw, ih) = (img.width() as usize, img.height() as usize);
         let mut err: Vec<f32> = img.as_raw().iter().map(|&v| v as f32).collect();
         for j in 0..ih {
             for i in 0..iw {
+                if mask.is_some_and(|m| m.as_raw()[j * iw + i] < 128) {
+                    continue;
+                }
                 let old = err[j * iw + i];
                 let new = self.quantize(old) as f32;
                 self.set(x + i as i32, y + j as i32, new as u8);
@@ -201,17 +209,46 @@ impl Canvas {
     }
 }
 
-/// Decodes an image file to grayscale, flattening any transparency onto white.
-pub fn decode_gray(bytes: &[u8]) -> anyhow::Result<image::GrayImage> {
-    let rgba = image::load_from_memory(bytes).context("decoding image")?.to_rgba8();
+/// Decodes an image file to grayscale: optionally only the part `crop` (x, y, w, h, in the
+/// image's pixels), with each color turned to the gray of the nearest color in `colors`, or
+/// to its brightness when `colors` is empty. Transparency is flattened onto white first.
+pub fn decode_mapped(bytes: &[u8], crop: Option<(u32, u32, u32, u32)>, colors: &[([u8; 3], u8)]) -> anyhow::Result<image::GrayImage> {
+    Ok(decode_with_alpha(bytes, crop, colors, false)?.0)
+}
+
+/// `decode_mapped`, and with `keep_alpha`, the image's transparency (0 clear .. 255 opaque) kept
+/// apart instead of flattened, its colors taken as they are.
+pub fn decode_with_alpha(
+    bytes: &[u8],
+    crop: Option<(u32, u32, u32, u32)>,
+    colors: &[([u8; 3], u8)],
+    keep_alpha: bool,
+) -> anyhow::Result<(image::GrayImage, Option<image::GrayImage>)> {
+    let mut rgba = image::load_from_memory(bytes).context("decoding image")?.to_rgba8();
+    if let Some((x, y, w, h)) = crop {
+        let (iw, ih) = rgba.dimensions();
+        let (x, y) = (x.min(iw.saturating_sub(1)), y.min(ih.saturating_sub(1)));
+        let (w, h) = (w.min(iw - x).max(1), h.min(ih - y).max(1));
+        rgba = image::imageops::crop_imm(&rgba, x, y, w, h).to_image();
+    }
+    let mut cache = std::collections::HashMap::new();
     let mut gray = image::GrayImage::new(rgba.width(), rgba.height());
     for (p, q) in rgba.pixels().zip(gray.pixels_mut()) {
         let [r, g, b, a] = p.0;
-        let l = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-        let a = a as f32 / 255.0;
-        q.0[0] = (l * a + 255.0 * (1.0 - a)).round() as u8;
+        let a = if keep_alpha { 1.0 } else { a as f32 / 255.0 };
+        let flat = |c: u8| (c as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+        let rgb = [flat(r), flat(g), flat(b)];
+        q.0[0] = if colors.is_empty() {
+            (0.299 * rgb[0] as f32 + 0.587 * rgb[1] as f32 + 0.114 * rgb[2] as f32).round() as u8
+        } else {
+            *cache.entry(rgb).or_insert_with(|| {
+                let d = |c: &[u8; 3]| (0..3).map(|i| (c[i] as i32 - rgb[i] as i32).pow(2)).sum::<i32>();
+                colors.iter().min_by_key(|(c, _)| d(c)).map(|(_, v)| *v).unwrap_or(255)
+            })
+        };
     }
-    Ok(gray)
+    let alpha = keep_alpha.then(|| image::GrayImage::from_fn(rgba.width(), rgba.height(), |x, y| image::Luma([rgba.get_pixel(x, y).0[3]])));
+    Ok((gray, alpha))
 }
 
 #[cfg(test)]
@@ -269,6 +306,25 @@ mod tests {
         let png = c.to_device_png(OG_IMAGE_LIMIT).unwrap();
         assert_eq!(depth(&png), png::BitDepth::One);
         assert!(png.len() <= OG_IMAGE_LIMIT);
+    }
+
+    #[test]
+    fn images_can_be_cropped_and_their_colors_mapped() {
+        // Left half red, right half green, with a blue stripe at the top.
+        let img = image::RgbImage::from_fn(40, 20, |x, y| {
+            image::Rgb(if y < 4 { [0, 0, 255] } else if x < 20 { [250, 10, 0] } else { [10, 200, 20] })
+        });
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+
+        let plain = decode_mapped(&png, None, &[]).unwrap();
+        assert_eq!(plain.dimensions(), (40, 20));
+        let mapped = decode_mapped(&png, Some((0, 4, 40, 16)), &[([255, 0, 0], 0), ([0, 255, 0], 170), ([0, 0, 255], 255)]).unwrap();
+        assert_eq!(mapped.dimensions(), (40, 16));
+        assert_eq!(mapped.get_pixel(5, 5).0[0], 0, "red, nearest to the red anchor");
+        assert_eq!(mapped.get_pixel(30, 5).0[0], 170, "green");
+        // A crop past the edge is cut to the image.
+        assert_eq!(decode_mapped(&png, Some((30, 10, 100, 100)), &[]).unwrap().dimensions(), (10, 10));
     }
 
     #[test]

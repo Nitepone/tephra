@@ -12,6 +12,10 @@ tephra runs on** (`127.0.0.1` or `::1`). Anywhere else gets `403`.
 - `code`: the app's code (required).
 - `validate`: its config check. Runs when not empty.
 - `config`: an instance config, such as `"units = 'imperial'"`.
+- `now`: the time the app sees as now, in `time.now()`, `os.time()` and `os.date()`: seconds
+  since 1970, or text like `"2026-11-22T13:00:00Z"`. For trying a weekend's phases without
+  shifting the test data.
+- `previous`: what `fetch` gets as its previous result.
 
 ## POST /api/v1/dev/fetch
 
@@ -26,6 +30,9 @@ to `render` as `data` to re-render without fetching again.
 Answer (`200`, or `422` when something failed):
 
     { "ok": true, "data": { ... }, "fetch": { "ms": 812, "limit_ms": 60000 } }
+
+`fetch` also has `refresh_at`, when the app asked to fetch next (`{ refresh = … }`), and `log`,
+the lines it wrote with `log()` or `print()`.
 
 ## POST /api/v1/dev/render
 
@@ -44,6 +51,10 @@ sizes. Besides the app, it takes:
 - `format`: `"png"` for an image instead of the JSON report (also `?format=png`). One size gives
   the device image; several give a sheet of them, labelled. If anything fails, the answer is the
   JSON report instead, with status `422`.
+
+- `at`: a list of times (as `now`) to render at: every size at each time, at most 24 renders.
+  `fetch`, if it runs, runs once, at the first.
+- `slow_ms`: report renders slower than this in `problems` (default 1000, half the limit).
 
 Every size is drawn as its own device screen: the app in the first slot of a layout with that
 size, the other slots empty.
@@ -91,11 +102,14 @@ What the fields mean:
 - `fetch`: `null` when `data` was given or the app has no `fetch`; otherwise its time and any error.
 - `slot`: the space the app drew into, in panel pixels. `layout` uses the same coordinates.
 - `png`: the device image as base64. `jq -r '.renders[0].png' | base64 -d > half.png` saves it.
-- `problems`: everything in `layout` worth a look, in words; also a render that took more than
-  half its limit, and an image larger than the 90,000 bytes an OG accepts.
+- `problems`: everything in `layout` worth a look, in words; also a render slower than
+  `slow_ms`, and an image larger than the 90,000 bytes an OG accepts.
+- `at`: the time the app saw as now, when one was given; `redraw_at`: when render asked to be
+  drawn again (`{ redraw_at = … }`); `log`: what it wrote with `log()` or `print()`.
 - `layout`: every node, in drawing order. `path` is `root`, then child indexes counted from 0, so
   `root/2/1` is the second child of the root's third child. `kind` is `column`, `row`, `box`,
-  `text`, `image`, `rule` or `spacer`.
+  `layers`, `first`, `text`, `image`, `rule` or `spacer`. A `first` adds `chosen`: which of its
+  children fitted and was drawn (its path continues with that index).
 - Text nodes add `text` (its first 80 characters), `size` (its height in pixels) and `lines`
   (lines drawn). Images add `image`: source width and height, then drawn width and height.
 - `overflow_px`, on a column: how many pixels taller its children wanted to be than it is.

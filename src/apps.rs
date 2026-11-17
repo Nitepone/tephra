@@ -8,9 +8,9 @@
 //! them with `spawn_blocking`.
 
 use crate::model::StoredApp;
-use crate::render::{BLACK, Canvas, Rect, decode_gray};
+use crate::render::decode_with_alpha;
 use crate::render::font::{Face, TextStyle};
-use crate::render::layout::{Align, Common, Dir, Fit, Justify, Node, TextAlign};
+use crate::render::layout::{Align, Common, Dir, Edges, Fill, Fit, Justify, Node, TextAlign};
 use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, Value, VmState};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,6 +27,8 @@ pub struct SettingField {
     #[serde(default)]
     pub label: String,
     /// `string`, `text`, `number`, `bool` or `choice`: documentation only, since configs are Lua.
+    /// `duration` ("6h"), `zone` ("Europe/London") and `time` ("16:04") are also checked before
+    /// the app runs.
     #[serde(rename = "type", default = "default_type")]
     pub kind: String,
     #[serde(default)]
@@ -184,7 +186,7 @@ const HTTP_MAX_BODY: u64 = 16 << 20;
 /// The `ui` constructors: each returns a plain table tagged with its kind.
 const PRELUDE: &str = r#"
 ui = {}
-for _, kind in ipairs { "column", "row", "box", "text", "image", "rule", "spacer" } do
+for _, kind in ipairs { "column", "row", "box", "layers", "first", "text", "image", "rule", "spacer" } do
   ui[kind] = function(t)
     if type(t) ~= "table" then t = { t } end
     t.kind = kind
@@ -195,10 +197,26 @@ end
 
 /// A sandboxed Lua state for one app (`label` names it in the log). `network`: whether `http`
 /// is available (fetch only).
-fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration) -> mlua::Result<Lua> {
+/// How a call runs, beyond the app and its config: for the developer API.
+#[derive(Debug, Clone, Default)]
+pub struct RunOpts {
+    /// The time `time.now()`, `os.time()` and `os.date()` give, instead of the clock's.
+    pub now: Option<i64>,
+    /// Where `log()` and `print()` also write, line by line.
+    pub log: Option<Arc<std::sync::Mutex<Vec<String>>>>,
+}
+
+impl RunOpts {
+    fn now(&self) -> i64 {
+        self.now.unwrap_or_else(|| chrono::Utc::now().timestamp())
+    }
+}
+
+fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration, opts: &RunOpts) -> mlua::Result<Lua> {
     let lua = Lua::new_with(StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::OS, LuaOptions::default())?;
     lua.set_memory_limit(MEMORY_LIMIT)?;
     let start = Instant::now();
+    let deadline = start + time;
     lua.set_hook(HookTriggers::new().every_nth_instruction(10_000), move |_, _| {
         if start.elapsed() > time {
             Err(mlua::Error::runtime(format!("took longer than {} s", time.as_secs())))
@@ -215,9 +233,17 @@ fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration) -> mlua:
     }
 
     let app = label.to_string();
+    let sink = opts.log.clone();
     let log = lua.create_function(move |_, args: mlua::Variadic<Value>| {
         let parts: Vec<String> = args.iter().map(|v| v.to_string().unwrap_or_else(|_| format!("{v:?}"))).collect();
-        tracing::info!(app = app.as_str(), "{}", parts.join(" "));
+        let line = parts.join(" ");
+        tracing::info!(app = app.as_str(), "{line}");
+        if let Some(sink) = &sink
+            && let Ok(mut lines) = sink.lock()
+            && lines.len() < 500
+        {
+            lines.push(line.chars().take(2000).collect());
+        }
         Ok(())
     })?;
     g.set("print", log.clone())?;
@@ -256,14 +282,39 @@ fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration) -> mlua:
     )?;
 
     if network {
-        g.set("http", http_table(&lua)?)?;
+        g.set("http", http_table(&lua, deadline)?)?;
+        // Waiting, for rate limits: within what is left of the time limit.
+        g.set(
+            "sleep",
+            lua.create_function(move |_, secs: f64| {
+                let left = deadline.saturating_duration_since(Instant::now()).as_secs_f64();
+                if !(0.0..=left - 0.5).contains(&secs) {
+                    return Err(mlua::Error::runtime(format!("sleep({secs}): only {left:.1} s of the time limit are left")));
+                }
+                std::thread::sleep(Duration::from_secs_f64(secs));
+                Ok(())
+            })?,
+        )?;
     }
     lua.load(PRELUDE).set_name("=prelude").exec()?;
     crate::luatime::install(&lua)?;
+    if let Some(now) = opts.now {
+        // A fixed clock: every way an app can read the time gives `now`.
+        lua.load(
+            r#"local now = ...
+            local os_time, os_date, relative = os.time, os.date, time.relative
+            time.now = function() return now end
+            time.relative = function(t, from) return relative(t, from or now) end
+            os.time = function(t) if t == nil then return now end return os_time(t) end
+            os.date = function(fmt, t) return os_date(fmt, t or now) end"#,
+        )
+        .set_name("=clock")
+        .call::<()>(now)?;
+    }
     Ok(lua)
 }
 
-fn http_table(lua: &Lua) -> mlua::Result<Table> {
+fn http_table(lua: &Lua, deadline: Instant) -> mlua::Result<Table> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
         .http_status_as_error(false)
@@ -272,15 +323,45 @@ fn http_table(lua: &Lua) -> mlua::Result<Table> {
         .into();
     let t = lua.create_table()?;
 
-    fn respond(lua: &Lua, r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> mlua::Result<Table> {
-        let mut r = r.map_err(mlua::Error::external)?;
+    fn respond(lua: &Lua, mut r: ureq::http::Response<ureq::Body>) -> mlua::Result<Table> {
         let status = r.status().as_u16();
-        let body = r.body_mut().with_config().limit(HTTP_MAX_BODY).read_to_vec().map_err(mlua::Error::external)?;
         let out = lua.create_table()?;
+        let hs = lua.create_table()?;
+        for (k, v) in r.headers() {
+            if let Ok(v) = v.to_str() {
+                hs.set(k.as_str().to_ascii_lowercase(), v)?;
+            }
+        }
+        let body = r.body_mut().with_config().limit(HTTP_MAX_BODY).read_to_vec().map_err(mlua::Error::external)?;
         out.set("status", status)?;
         out.set("ok", (200..300).contains(&status))?;
+        out.set("headers", hs)?;
         out.set("body", lua.create_string(&body)?)?;
         Ok(out)
+    }
+    // Rate limits: a 429 or 503 is tried again after its Retry-After (or a second), up to three
+    // times, as long as the wait fits in what is left of the time limit.
+    fn with_retries(deadline: Instant, send: impl Fn() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> mlua::Result<ureq::http::Response<ureq::Body>> {
+        let mut tries = 0;
+        loop {
+            let r = send().map_err(mlua::Error::external)?;
+            let status = r.status().as_u16();
+            if !(status == 429 || status == 503) || tries == 3 {
+                return Ok(r);
+            }
+            let after = r.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| {
+                v.trim().parse::<f64>().ok().or_else(|| {
+                    chrono::DateTime::parse_from_rfc2822(v.trim()).ok().map(|t| (t.timestamp() - chrono::Utc::now().timestamp()) as f64)
+                })
+            });
+            let wait = after.unwrap_or(1.0).max(0.1);
+            let left = deadline.saturating_duration_since(Instant::now()).as_secs_f64();
+            if wait > 30.0 || wait > left - 2.0 {
+                return Ok(r);
+            }
+            std::thread::sleep(Duration::from_secs_f64(wait));
+            tries += 1;
+        }
     }
     fn headers(opts: &Option<Table>) -> mlua::Result<Vec<(String, String)>> {
         let Some(h) = opts.as_ref().map(|o| o.get::<Option<Table>>("headers")).transpose()?.flatten() else {
@@ -293,22 +374,31 @@ fn http_table(lua: &Lua) -> mlua::Result<Table> {
     t.set(
         "get",
         lua.create_function(move |lua, (url, opts): (String, Option<Table>)| {
-            let mut req = a.get(&url);
-            for (k, v) in headers(&opts)? {
-                req = req.header(k, v);
-            }
-            respond(lua, req.call())
+            let hs = headers(&opts)?;
+            let r = with_retries(deadline, || {
+                let mut req = a.get(&url);
+                for (k, v) in &hs {
+                    req = req.header(k, v);
+                }
+                req.call()
+            })?;
+            respond(lua, r)
         })?,
     )?;
     let a = agent;
     t.set(
         "post",
         lua.create_function(move |lua, (url, body, opts): (String, mlua::LuaString, Option<Table>)| {
-            let mut req = a.post(&url);
-            for (k, v) in headers(&opts)? {
-                req = req.header(k, v);
-            }
-            respond(lua, req.send(&body.as_bytes()[..]))
+            let hs = headers(&opts)?;
+            let body = body.as_bytes().to_vec();
+            let r = with_retries(deadline, || {
+                let mut req = a.post(&url);
+                for (k, v) in &hs {
+                    req = req.header(k, v);
+                }
+                req.send(&body[..])
+            })?;
+            respond(lua, r)
         })?,
     )?;
     t.set(
@@ -376,7 +466,7 @@ pub fn lua_literal(v: &serde_json::Value) -> String {
 
 fn read_meta(meta: &mut AppMeta) {
     let result = (|| -> mlua::Result<()> {
-        let lua = new_lua(&meta.name, Path::new("."), false, RENDER_TIME)?;
+        let lua = new_lua(&meta.name, Path::new("."), false, RENDER_TIME, &RunOpts::default())?;
         lua.globals().set("config", lua.create_table()?)?;
         let t = load_app(&lua, meta)?;
         if meta.builtin {
@@ -511,6 +601,14 @@ impl LuaFailure {
         Self { message: short, chunk: None, line: None, traceback }
     }
 
+    /// One line, with where it happened: "config:1: unexpected symbol".
+    pub fn short(&self) -> String {
+        match (&self.chunk, self.line) {
+            (Some(c), Some(l)) => format!("{c}:{l}: {}", self.message),
+            _ => self.message.clone(),
+        }
+    }
+
     fn plain(message: &str) -> Self {
         Self { message: message.to_string(), chunk: None, line: None, traceback: None }
     }
@@ -551,6 +649,28 @@ fn prepare_config(lua: &Lua, app: &AppMeta, config_src: &str) -> mlua::Result<Ta
             config.raw_set(f.key.as_str(), to_lua(lua, &f.default)?)?;
         }
     }
+    // Typed settings: a value that can't be read is the config's mistake, named as such.
+    let time: Table = lua.globals().get("time")?;
+    for f in &app.settings {
+        let v: Value = config.raw_get(f.key.as_str())?;
+        if v.is_nil() {
+            continue;
+        }
+        let key = f.key.as_str();
+        let problem = match f.kind.as_str() {
+            "duration" => time.get::<mlua::Function>("duration")?.call::<i64>(v).err().map(|e| short_error(&e)),
+            "zone" => time.get::<mlua::Function>("format")?.call::<String>((0, "%H", v)).err().map(|e| short_error(&e)),
+            "time" => {
+                let s = v.to_string().unwrap_or_default();
+                let ok = s.split_once(':').and_then(|(h, m)| Some((h.parse::<u32>().ok()?, m.parse::<u32>().ok()?))).is_some_and(|(h, m)| h < 24 && m < 60 && s.len() <= 5);
+                (!ok).then(|| format!("{s:?} is not a time of day like \"16:04\""))
+            }
+            _ => None,
+        };
+        if let Some(p) = problem {
+            return Err(mlua::Error::runtime(format!("config: {key}: {p}")));
+        }
+    }
     lua.globals().set("config", config.clone())?;
     if app.validate_enabled && !app.validate_code.trim().is_empty() {
         lua.load(&app.validate_code).set_name("=config check").exec()?;
@@ -561,66 +681,101 @@ fn prepare_config(lua: &Lua, app: &AppMeta, config_src: &str) -> mlua::Result<Ta
 /// Whether an instance's config runs and passes the app's check.
 pub fn check_config(app: &AppMeta, config_src: &str) -> Result<(), String> {
     (|| -> mlua::Result<()> {
-        let lua = new_lua(&app.name, Path::new("."), false, RENDER_TIME)?;
+        let lua = new_lua(&app.name, Path::new("."), false, RENDER_TIME, &RunOpts::default())?;
         prepare_config(&lua, app, config_src).map(|_| ())
     })()
     .map_err(|e| short_error(&e))
 }
 
-/// Runs the app's `fetch(config)`: what it returns is cached and handed to `render`.
-pub fn fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_json::Value, String> {
-    if let Some(e) = &app.error {
-        return Err(e.clone());
-    }
-    run_fetch(app, config_src, data_dir).map_err(|e| short_error(&e))
+/// What `fetch` returned: the data, and when it asked to run next (seconds since 1970).
+#[derive(Debug, Clone)]
+pub struct Fetched {
+    pub data: serde_json::Value,
+    pub next: Option<i64>,
 }
 
-/// `fetch`, with the failure's position and traceback.
-pub fn fetch_detailed(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_json::Value, LuaFailure> {
+/// Runs the app's `fetch(config, previous)`: what it returns is cached and handed to `render`.
+pub fn fetch(app: &AppMeta, config_src: &str, previous: &serde_json::Value, data_dir: &Path) -> Result<Fetched, String> {
+    fetch_with(app, config_src, previous, data_dir, &RunOpts::default()).map_err(|f| f.short())
+}
+
+/// `fetch`, with run options, and the failure's position and traceback.
+pub fn fetch_with(app: &AppMeta, config_src: &str, previous: &serde_json::Value, data_dir: &Path, opts: &RunOpts) -> Result<Fetched, LuaFailure> {
     if let Some(e) = &app.error {
         return Err(LuaFailure::plain(e));
     }
-    run_fetch(app, config_src, data_dir).map_err(|e| LuaFailure::from_error(&e))
-}
-
-fn run_fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> mlua::Result<serde_json::Value> {
-    (|| -> mlua::Result<serde_json::Value> {
-        let lua = new_lua(&app.name, data_dir, true, FETCH_TIME)?;
+    (|| -> mlua::Result<Fetched> {
+        let lua = new_lua(&app.name, data_dir, true, FETCH_TIME, opts)?;
         let config = prepare_config(&lua, app, config_src)?;
         let t = load_app(&lua, app)?;
         let f: mlua::Function = t.get("fetch")?;
-        let out: Value = f.call(config)?;
-        lua.from_value(out)
+        let out: mlua::MultiValue = f.call((config, to_lua(&lua, previous)?))?;
+        let mut out = out.into_iter();
+        let data = lua.from_value(out.next().unwrap_or(Value::Nil))?;
+        let next = match out.next() {
+            Some(Value::Table(o)) => {
+                let after = match o.get::<Value>("refresh")? {
+                    Value::Nil => None,
+                    Value::Integer(n) => Some(n.max(60)),
+                    Value::Number(n) => Some((n as i64).max(60)),
+                    v => Some(parse_duration(&v.to_string()?).ok_or_else(|| mlua::Error::runtime("fetch's refresh: seconds or a duration like \"5m\""))? as i64),
+                };
+                match (o.get::<Option<i64>>("refresh_at")?, after) {
+                    (Some(at), _) => Some(at.max(opts.now() + 60)),
+                    (None, Some(after)) => Some(opts.now() + after),
+                    (None, None) => None,
+                }
+            }
+            Some(Value::Nil) | None => None,
+            Some(v) => return Err(mlua::Error::runtime(format!("fetch's second result: a table like {{ refresh = \"5m\" }}, not {}", v.type_name()))),
+        };
+        Ok(Fetched { data, next })
     })()
+    .map_err(|e| LuaFailure::from_error(&e))
+}
+
+/// What `render` drew, and when it asked to be drawn again (seconds since 1970).
+#[derive(Debug, Clone)]
+pub struct Rendered {
+    pub node: Node,
+    pub redraw_at: Option<i64>,
 }
 
 /// Runs the app's `render(data, slot, config)` and turns the tree it returns into nodes.
 pub fn render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> Result<Node, String> {
-    if let Some(e) = &app.error {
-        return Err(e.clone());
-    }
-    run_render(app, config_src, data, slot, data_dir).map_err(|e| short_error(&e))
+    render_with(app, config_src, data, slot, data_dir, &RunOpts::default()).map(|r| r.node).map_err(|f| f.short())
 }
 
-/// `render`, with the failure's position and traceback.
-pub fn render_detailed(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> Result<Node, LuaFailure> {
+/// `render`, with run options, when to draw again, and the failure's position and traceback.
+pub fn render_with(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path, opts: &RunOpts) -> Result<Rendered, LuaFailure> {
     if let Some(e) = &app.error {
         return Err(LuaFailure::plain(e));
     }
-    run_render(app, config_src, data, slot, data_dir).map_err(|e| LuaFailure::from_error(&e))
-}
-
-fn run_render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> mlua::Result<Node> {
-    (|| -> mlua::Result<Node> {
-        let lua = new_lua(&app.name, data_dir, false, RENDER_TIME)?;
+    (|| -> mlua::Result<Rendered> {
+        let lua = new_lua(&app.name, data_dir, false, RENDER_TIME, opts)?;
         install_measure(&lua, app.dir.clone(), data_dir.to_path_buf())?;
         let config = prepare_config(&lua, app, config_src)?;
         let t = load_app(&lua, app)?;
         let f: mlua::Function = t.get("render")?;
-        let tree: Value = f.call((to_lua(&lua, data)?, lua.to_value(&slot)?, config))?;
+        let out: mlua::MultiValue = f.call((to_lua(&lua, data)?, lua.to_value(&slot)?, config))?;
+        let mut out = out.into_iter();
+        let tree = out.next().unwrap_or(Value::Nil);
+        let redraw_at = match out.next() {
+            Some(Value::Table(o)) => match (o.get::<Option<i64>>("redraw_at")?, o.get::<Value>("redraw")?) {
+                (Some(at), _) => Some(at),
+                (None, Value::Nil) => None,
+                (None, Value::Integer(n)) => Some(opts.now() + n),
+                (None, Value::Number(n)) => Some(opts.now() + n as i64),
+                (None, v) => Some(opts.now() + parse_duration(&v.to_string()?).ok_or_else(|| mlua::Error::runtime("render's redraw: seconds or a duration like \"5m\""))? as i64),
+            },
+            Some(Value::Nil) | None => None,
+            Some(v) => return Err(mlua::Error::runtime(format!("render's second result: a table like {{ redraw_at = t }}, not {}", v.type_name()))),
+        };
         let ctx = NodeCtx { app_dir: app.dir.as_deref(), data_dir };
-        node_from_lua(&tree, &ctx).map_err(mlua::Error::runtime)
+        let node = node_from_lua(&tree, &ctx).map_err(mlua::Error::runtime)?;
+        Ok(Rendered { node, redraw_at })
     })()
+    .map_err(|e| LuaFailure::from_error(&e))
 }
 
 /// `ui.measure(node [, max_w [, max_h]])`: the size a node would take, before drawing it.
@@ -645,18 +800,7 @@ fn install_measure(lua: &Lua, app_dir: Option<PathBuf>, data_dir: PathBuf) -> ml
         let needed_w = n.measured(f32::INFINITY, f32::INFINITY).0;
         let needed_h = n.measured(lw, f32::INFINITY).1;
         // Whether it fits: lay it out in the space given, exactly as a render would.
-        let (tw, th) = (lw.min(needed_w).min(4000.0), lh.min(needed_h).min(4000.0));
-        let mut cv = Canvas::new(tw.max(1.0) as u32, th.max(1.0) as u32);
-        cv.report = Some(Vec::new());
-        n.draw(&mut cv, Rect::new(0, 0, tw as i32, th as i32), BLACK, Dir::Column);
-        let report = cv.report.take().unwrap_or_default();
-        let mut cut: Vec<&str> = report.iter().flat_map(|e| e.cut.iter().copied()).collect();
-        if report.iter().any(|e| e.overflow_px.is_some()) {
-            cut.push("overflow");
-        }
-        cut.sort();
-        cut.dedup();
-        let missing: String = report.iter().filter_map(|e| e.missing.as_deref()).collect();
+        let (cut, missing) = n.trial(lw.min(needed_w), lh.min(needed_h));
 
         let out = lua.create_table()?;
         out.set("w", w.ceil() as i64)?;
@@ -690,7 +834,26 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
     let get_s = |k: &str| t.get::<Option<String>>(k).ok().flatten();
     let get_f = |k: &str| t.get::<Option<f32>>(k).ok().flatten();
     let get_b = |k: &str| t.get::<Option<bool>>(k).ok().flatten();
-    let common = Common { grow: get_f("grow").unwrap_or(0.0), width: get_f("width"), height: get_f("height") };
+    let shade = |k: &str| -> Result<Option<u8>, String> {
+        match t.get::<Value>(k).map_err(|e| e.to_string())? {
+            Value::Nil => Ok(None),
+            Value::String(s) => match &*s.to_str().map_err(|e| e.to_string())? {
+                "black" => Ok(Some(0)),
+                "dark" => Ok(Some(85)),
+                "light" => Ok(Some(170)),
+                "white" => Ok(Some(255)),
+                other => Err(format!("{k}: \"black\", \"dark\", \"light\" or \"white\", not {other:?}")),
+            },
+            v => Err(format!("{k}: \"black\", \"dark\", \"light\" or \"white\", not a {}", v.type_name())),
+        }
+    };
+    let fill = match t.get::<Option<String>>("fill").ok().flatten().as_deref() {
+        Some("hatch") => Some(Fill::Hatch),
+        Some("crosshatch") => Some(Fill::Cross),
+        Some("dots") => Some(Fill::Dots),
+        _ => shade("fill").map_err(|e| e.replace("\"light\" or \"white\"", "\"light\", \"white\", \"hatch\", \"crosshatch\" or \"dots\""))?.map(Fill::Gray),
+    };
+    let common = Common { grow: get_f("grow").unwrap_or(0.0), width: get_f("width"), height: get_f("height"), fill, color: shade("color")? };
     let kind = get_s("kind").ok_or("a table without a kind: build nodes with ui.column, ui.text, ...")?;
 
     let children = || -> Result<Vec<Node>, String> {
@@ -715,6 +878,7 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
                 Some("start") => Align::Start,
                 Some("center") => Align::Center,
                 Some("end") => Align::End,
+                Some("baseline") => Align::Baseline,
                 _ => Align::Stretch,
             },
             justify: match get_s("justify").as_deref() {
@@ -724,7 +888,16 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
                 _ => Justify::Start,
             },
             padding: get_f("padding").unwrap_or(if kind == "box" { 10.0 } else { 0.0 }),
-            border: get_f("border").unwrap_or(if kind == "box" { 2.0 } else { 0.0 }),
+            border: match t.get::<Value>("border").map_err(|e| e.to_string())? {
+                Value::Nil => Edges::uniform(if kind == "box" { 2.0 } else { 0.0 }),
+                Value::Integer(n) => Edges::uniform(n as f32),
+                Value::Number(n) => Edges::uniform(n as f32),
+                Value::Table(b) => {
+                    let side = |k: &str| b.get::<Option<f32>>(k).ok().flatten().unwrap_or(0.0);
+                    Edges { top: side("top"), right: side("right"), bottom: side("bottom"), left: side("left") }
+                }
+                _ => return Err("border: a width, or { top = …, right = …, bottom = …, left = … }".into()),
+            },
             invert: get_b("invert").unwrap_or(false),
             common,
         },
@@ -748,6 +921,12 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
             }
             style.italic = get_b("italic").unwrap_or(false);
             style.smooth = get_b("smooth");
+            style.tracking = get_f("tracking").unwrap_or(0.0).clamp(-20.0, 100.0);
+            style.tabular = match get_s("digits").as_deref() {
+                None | Some("proportional") => false,
+                Some("tabular") => true,
+                Some(other) => return Err(format!("digits: \"tabular\" or \"proportional\", not {other:?}")),
+            };
             let shrink_to = match get_s("fit").as_deref() {
                 None => None,
                 Some("shrink") => Some(get_f("min_size").unwrap_or(10.0).clamp(6.0, style.size)),
@@ -770,15 +949,72 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
         "image" => {
             let src: String = t.get::<Option<String>>(1).ok().flatten().ok_or("ui.image needs a source: ui.image { \"file.png\" } or a blob")?;
             let bytes = load_image_bytes(&src, ctx)?;
-            let img = decode_gray(&bytes).map_err(|e| format!("{src}: {e:#}"))?;
+            let crop = match t.get::<Value>("crop").map_err(|e| e.to_string())? {
+                Value::Nil => None,
+                Value::Table(c) => {
+                    let n = |k: &str, i: i64| -> Result<u32, String> {
+                        c.get::<Option<f64>>(k)
+                            .ok()
+                            .flatten()
+                            .or_else(|| c.get::<Option<f64>>(i).ok().flatten())
+                            .map(|v| v.max(0.0) as u32)
+                            .ok_or_else(|| "crop: { x = …, y = …, w = …, h = … } in the image's pixels".to_string())
+                    };
+                    Some((n("x", 1)?, n("y", 2)?, n("w", 3)?, n("h", 4)?))
+                }
+                _ => return Err("crop: { x = …, y = …, w = …, h = … } in the image's pixels".into()),
+            };
+            let mut colors = Vec::new();
+            if let Some(list) = t.get::<Option<Table>>("colors").map_err(|e| e.to_string())? {
+                let bad = || "colors: a list of { \"#rrggbb\", gray }, the gray a number (0 black to 255 white) or \"black\", \"dark\", \"light\" or \"white\"".to_string();
+                for pair in list.sequence_values::<Table>() {
+                    let pair = pair.map_err(|_| bad())?;
+                    let hexs: String = pair.get(1).map_err(|_| bad())?;
+                    let h = hexs.trim_start_matches('#');
+                    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Err(format!("colors: {hexs:?} is not a color like \"#04e9e7\""));
+                    }
+                    let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0);
+                    let gray = match pair.get::<Value>(2).map_err(|_| bad())? {
+                        Value::Integer(v) => v.clamp(0, 255) as u8,
+                        Value::Number(v) => v.clamp(0.0, 255.0).round() as u8,
+                        Value::String(s) => match &*s.to_str().map_err(|_| bad())? {
+                            "black" => 0,
+                            "dark" => 85,
+                            "light" => 170,
+                            "white" => 255,
+                            _ => return Err(bad()),
+                        },
+                        _ => return Err(bad()),
+                    };
+                    colors.push(([byte(0), byte(2), byte(4)], gray));
+                }
+            }
+            let transparent = get_b("transparent").unwrap_or(false);
+            let (img, mask) = decode_with_alpha(&bytes, crop, &colors, transparent).map_err(|e| format!("{src}: {e:#}"))?;
             Node::Image {
                 img: Arc::new(img),
+                mask: mask.map(Arc::new),
                 fit: if get_s("fit").as_deref() == Some("cover") { Fit::Cover } else { Fit::Contain },
                 dither: get_b("dither").unwrap_or(true),
+                blur: get_f("blur").unwrap_or(0.0).clamp(0.0, 20.0),
+                threshold: get_f("threshold").map(|v| v.clamp(0.0, 255.0) as u8),
+                invert: get_b("invert").unwrap_or(false),
                 common,
             }
         }
-        "rule" => Node::Rule { thickness: get_f("thickness").unwrap_or(2.0), common },
+        "layers" => Node::Layers { children: children()?, common },
+        "first" => Node::First { children: children()?, common },
+        "rule" => Node::Rule {
+            thickness: get_f("thickness").unwrap_or(2.0),
+            dash: match t.get::<Value>("dash").map_err(|e| e.to_string())? {
+                Value::Nil | Value::Boolean(false) => None,
+                Value::Boolean(true) => Some((6.0, 4.0)),
+                Value::Table(d) => Some((d.get::<f32>(1).unwrap_or(6.0), d.get::<f32>(2).unwrap_or(4.0))),
+                _ => return Err("dash: true, or { on, off } in pixels".into()),
+            },
+            common,
+        },
         "spacer" => Node::Spacer { common: Common { grow: if common.grow > 0.0 { common.grow } else { 1.0 }, ..common } },
         other => return Err(format!("unknown node kind {other:?}")),
     })
@@ -854,6 +1090,99 @@ mod tests {
         let Node::Stack { children, .. } = &node else { panic!() };
         assert_eq!(children.len(), 2, "the nil hole is skipped");
         assert_eq!(first_text(&node), "hello world", "the default fills in");
+    }
+
+    #[test]
+    fn fetch_gets_its_previous_result_and_may_choose_when_it_runs_next() {
+        let meta = stored(r#"return {
+            fetch = function(config, previous)
+              return { n = (previous and previous.n or 0) + 1 }, { refresh = "5m" }
+            end,
+            render = function() return ui.text "x" end }"#);
+        let opts = RunOpts { now: Some(1_000_000), log: None };
+        let f = fetch_with(&meta, "", &serde_json::json!({ "n": 41 }), Path::new("."), &opts).unwrap();
+        assert_eq!(f.data["n"], 42);
+        assert_eq!(f.next, Some(1_000_300));
+        let f = fetch_with(&meta, "", &serde_json::Value::Null, Path::new("."), &opts).unwrap();
+        assert_eq!(f.data["n"], 1, "no previous result the first time");
+    }
+
+    #[test]
+    fn render_sees_the_given_clock_logs_and_may_ask_to_be_drawn_again() {
+        let meta = stored(r#"return { render = function()
+            log("drawn at", time.now())
+            return ui.text { time.now() .. " " .. os.time() .. " " .. os.date("!%H:%M") .. " " .. time.relative(time.now() + 7200) },
+              { redraw_at = time.now() + 120 }
+        end }"#);
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let opts = RunOpts { now: Some(3600 * 13), log: Some(log.clone()) };
+        let r = render_with(&meta, "", &serde_json::Value::Null, slot(), Path::new("."), &opts).unwrap();
+        assert_eq!(first_text(&r.node), "46800 46800 13:00 in 2 h");
+        assert_eq!(r.redraw_at, Some(46_920));
+        assert_eq!(log.lock().unwrap().as_slice(), ["drawn at 46800"]);
+    }
+
+    #[test]
+    fn http_waits_out_rate_limits_and_sleep_waits() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for (i, conn) in listener.incoming().take(2).enumerate() {
+                let mut conn = conn.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = conn.read(&mut buf);
+                let reply = if i == 0 {
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nX-Answer: 42\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                };
+                conn.write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        let meta = stored(&format!(r#"return {{
+            fetch = function()
+              local r = http.get("http://127.0.0.1:{port}/")
+              sleep(0.1)
+              return {{ status = r.status, body = r.body, answer = r.headers["x-answer"] }}
+            end,
+            render = function() return ui.text "x" end }}"#));
+        let t = Instant::now();
+        let f = fetch(&meta, "", &serde_json::Value::Null, Path::new(".")).unwrap();
+        assert_eq!(f.data, serde_json::json!({ "status": 200, "body": "ok", "answer": "42" }));
+        assert!(t.elapsed() >= Duration::from_millis(1100), "waited for Retry-After and the sleep");
+    }
+
+    #[test]
+    fn typed_settings_are_checked() {
+        let meta = stored(r#"return {
+            settings = {
+              { key = "every", type = "duration", default = "6h" },
+              { key = "zone", type = "zone", default = "local" },
+              { key = "at", type = "time", default = "16:04" },
+            },
+            render = function(_, _, config) return ui.text { tostring(time.duration(config.every)) } end }"#);
+        let ok = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&ok), "21600");
+        for (config, key) in [(r#"every = "6x""#, "every"), (r#"zone = "Mars/Olympus""#, "zone"), (r#"at = "25:00""#, "at")] {
+            let err = render(&meta, config, &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+            assert!(err.contains(&format!("config: {key}:")), "{config}: {err}");
+        }
+        assert_eq!(crate::luatime::parse_duration("1h30m"), Ok(5400));
+    }
+
+    #[test]
+    fn letter_spacing_and_tabular_digits() {
+        let meta = stored(r#"return { render = function()
+            local w = function(t) return ui.measure(ui.text(t)).w end
+            return ui.text { table.concat({
+              tostring(w { "1111", digits = "tabular", font = "overpass" } == w { "0000", digits = "tabular", font = "overpass" }),
+              tostring(w { "1111", font = "overpass" } < w { "0000", font = "overpass" }),
+              w { "RACE", tracking = 4 } - w { "RACE" },
+            }, " ") }
+        end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "true true 12");
     }
 
     #[test]
@@ -955,11 +1284,11 @@ mod tests {
     #[test]
     fn failures_say_where() {
         let meta = stored("return { render = function(d, s, c)\n  return ui.text { c.missing.field }\nend }");
-        let e = render_detailed(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        let e = render_with(&meta, "", &serde_json::Value::Null, slot(), Path::new("."), &RunOpts::default()).unwrap_err();
         assert_eq!((e.chunk.as_deref(), e.line), (Some("app"), Some(2)), "{e:?}");
         assert!(e.message.contains("missing"), "{e:?}");
         assert!(e.traceback.is_some());
-        let e = render_detailed(&stored(DEMO), "who = = 1", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        let e = render_with(&stored(DEMO), "who = = 1", &serde_json::Value::Null, slot(), Path::new("."), &RunOpts::default()).unwrap_err();
         assert_eq!((e.chunk.as_deref(), e.line), (Some("config"), Some(1)), "{e:?}");
     }
 
@@ -992,6 +1321,64 @@ mod tests {
         end }"#);
         let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
         assert_eq!(first_text(&node), "149 true false too_wide true 0 false max_lines true \u{E000}");
+    }
+
+    #[test]
+    fn layers_draw_transparent_images_over_each_other() {
+        use crate::render::{Canvas, Rect};
+        let dir = std::env::temp_dir().join(format!("tephra-layers-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A see-through image with a black square in its middle.
+        let img = image::RgbaImage::from_fn(20, 20, |x, y| image::Rgba(if (5..15).contains(&x) && (5..15).contains(&y) { [0, 0, 0, 255] } else { [0, 0, 0, 0] }));
+        img.save(dir.join("mark.png")).unwrap();
+        let mut meta = stored(r#"return { render = function()
+            return ui.layers {
+              ui.box { fill = "dark", border = 0 },
+              ui.image { "mark.png", transparent = true, fit = "cover", dither = false, blur = 1 },
+            }
+        end }"#);
+        meta.dir = Some(dir.clone());
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        let mut cv = Canvas::new(100, 100).with_grays(4);
+        node.draw(&mut cv, Rect::new(0, 0, 100, 100), crate::render::BLACK, crate::render::layout::Dir::Column);
+        assert_eq!(cv.get(50, 50), 0, "the mark, over the fill");
+        assert_eq!(cv.get(5, 5), 85, "the fill shows through the clear parts");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fills_shade_with_four_grays_and_turn_text_white_on_dark() {
+        use crate::render::{Canvas, Rect};
+        let meta = stored(r#"return { render = function()
+            return ui.column { gap = 0,
+              ui.box { fill = "dark", border = 0, height = 40, ui.text { "on dark", smooth = false } },
+              ui.box { fill = "light", border = 0, height = 40, ui.text { "light", color = "dark", smooth = false } },
+            }
+        end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        let draw = |grays: u8| {
+            let mut cv = Canvas::new(400, 80).with_grays(grays);
+            node.draw(&mut cv, Rect::new(0, 0, 400, 80), crate::render::BLACK, crate::render::layout::Dir::Column);
+            let mut seen = std::collections::BTreeSet::new();
+            for y in 0..80 {
+                for x in 0..400 {
+                    seen.insert((y / 40, cv.get(x, y)));
+                }
+            }
+            seen
+        };
+        // 4 grays: the dark box has dark gray and white text; the light one light gray and dark text.
+        let four = draw(4);
+        assert!(four.contains(&(0, 85)) && four.contains(&(0, 255)) && !four.contains(&(0, 0)), "{four:?}");
+        assert!(four.contains(&(1, 170)) && four.contains(&(1, 85)), "{four:?}");
+        // 2 grays: dark becomes black (text still white), light becomes white.
+        let two = draw(2);
+        assert!(two.iter().all(|&(_, v)| v == 0 || v == 255));
+        assert!(two.contains(&(0, 0)) && two.contains(&(0, 255)));
+
+        let bad = stored(r#"return { render = function() return ui.box { fill = "blue" } end }"#);
+        let err = render(&bad, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert!(err.contains("fill: \"black\", \"dark\", \"light\", \"white\", \"hatch\""), "{err}");
     }
 
     #[test]

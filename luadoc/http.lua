@@ -1,6 +1,10 @@
 --- Web requests. Only available in `fetch`.
 --
 -- Requests time out after 20 seconds, and bodies over 16 MB fail. Redirects are followed.
+--
+-- Rate limits are handled for you: an answer of 429 (too many requests) or 503 is asked for
+-- again after the wait its `Retry-After` header gives (a second if none), up to three times, as
+-- long as the wait fits in fetch's time limit. To space requests yourself, use @{globals.sleep}.
 -- An answer with an error status is returned, not raised: check `ok`.
 -- @module http
 
@@ -11,6 +15,7 @@ local http = {}
 -- @tfield int status The HTTP status, such as 200.
 -- @tfield bool ok Whether the status is 2xx.
 -- @tfield string body The body, as bytes: text, or binary data for @{globals.blob}.
+-- @tfield table headers The answer's headers, by lowercase name: `r.headers["last-modified"]`.
 
 --- Sends a GET request.
 -- @string url

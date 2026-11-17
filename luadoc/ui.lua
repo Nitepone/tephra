@@ -29,13 +29,23 @@ local ui = {}
 -- @tfield[opt=0] number grow A share of the space the parent has left over.
 -- @tfield[opt] number width A fixed width in pixels.
 -- @tfield[opt] number height A fixed height in pixels.
+-- @tfield[opt] string fill A background: `"black"`, `"dark"` (dark gray), `"light"` (light
+-- gray) or `"white"`; or a pattern of black on white, the same with 2 grays as with 4:
+-- `"hatch"` (diagonal lines), `"crosshatch"` or `"dots"`. What is drawn on it is white on
+-- `"black"` and `"dark"`, black on the others. With 2 grays, `"dark"` is drawn black and
+-- `"light"` white.
+-- @tfield[opt] string color The color of the node's text and lines, and its children's: the
+-- same four names. With 2 grays, `"dark"` is black and `"light"` white.
 
 --- Children one under another.
 -- @tparam table t The children, then these options:
 -- @tparam[opt=6] number t.gap Pixels between children.
 -- @tparam[opt="stretch"] string t.align Across: `"start"`, `"center"`, `"end"` or `"stretch"`.
+-- In a row, also `"baseline"`: the first lines of text line up on their baseline, whatever their
+-- sizes (children without text go at the top).
 -- @tparam[opt="start"] string t.justify Along: `"start"`, `"center"`, `"end"` or `"between"`.
--- Ignored when a child grows.
+-- Ignored when a child grows. Growing children share the space by `grow`, whatever their own
+-- size: two with `grow = 1` are equally wide.
 -- @treturn Node
 -- @usage ui.column { justify = "center", ui.text "a", ui.text "b" }
 function ui.column(t) end
@@ -45,12 +55,14 @@ function ui.column(t) end
 -- @tparam table t The children, then options.
 -- @treturn Node
 -- @usage ui.row { align = "center", ui.text { "72°", style = "large" }, ui.text "Sunny" }
+-- @usage ui.row { align = "baseline", ui.text { "72°", style = "huge" }, ui.text "feels 70" }
 function ui.row(t) end
 
 --- A column with a frame.
 -- @tparam table t The children, then the options of @{column} and:
 -- @tparam[opt=10] number t.padding Pixels between the frame and the children.
--- @tparam[opt=2] number t.border Width of the frame; 0 for none.
+-- @tparam[opt=2] number|table t.border Width of the frame; 0 for none. Or each side's:
+-- `{ left = 3 }`, `{ top = 2, bottom = 2 }` (sides left out have none).
 -- @tparam[opt=false] bool t.invert White on black.
 -- @treturn Node
 -- @usage ui.box { invert = true, ui.text { "ALERT", style = "title" } }
@@ -95,6 +107,10 @@ function ui.box(t) end
 -- doesn't fit ends in "…". Newlines always break.
 -- @tparam[opt] int t.max_lines At most this many lines; the last ends in "…" if cut.
 -- @tparam[opt="left"] string t.align `"left"`, `"center"` or `"right"`.
+-- @tparam[opt=0] number t.tracking Extra space between letters, in pixels: `"RACE WEEKEND"` set
+-- wide, as on a ticket.
+-- @tparam[opt="proportional"] string t.digits `"tabular"`: every digit as wide as the widest,
+-- so numbers line up in columns in any font.
 -- @treturn Node
 -- @usage ui.text { "A long forecast for the week…", wrap = true, max_lines = 3 }
 -- @usage ui.text { data.race_name, style = "huge", fit = "shrink", min_size = 24 }
@@ -110,8 +126,24 @@ function ui.text(t) end
 -- and crops the edges.
 -- @tparam[opt=true] bool t.dither Dither for photos; turn off for line art and text, which
 -- then take the nearest gray.
+-- @tparam[opt] table t.crop Only part of the image: `{ x = …, y = …, w = …, h = … }`, in the
+-- image's own pixels, from its top left corner.
+-- @tparam[opt] table t.colors Gray for each color, instead of the colors' brightness: a list of
+-- `{ "#rrggbb", gray }`, the gray a number (0 black to 255 white) or `"black"`, `"dark"`,
+-- `"light"` or `"white"`. Every pixel takes the gray of the nearest color listed. For maps and
+-- charts whose colors mean something, such as radar.
+-- @tparam[opt=false] bool t.transparent Keep the image's transparency: see-through parts leave
+-- what is under them, for @{layers}. Without it, transparency is drawn white.
+-- @tparam[opt=0] number t.blur Soften the image after scaling, by this many pixels: coarse data
+-- (radar, a heat map) then comes out as smooth shapes instead of blocks.
+-- @tparam[opt] number t.threshold Black below this gray (0 to 255), white from it, after
+-- scaling: for line art such as track maps, without dithering's speckle.
+-- @tparam[opt=false] bool t.invert Light for dark and dark for light.
 -- @treturn Node
 -- @usage ui.image { data.photo, fit = "cover", grow = 1 }
+-- @usage -- Light rain dark gray, heavy rain black, the white map left white:
+-- ui.image { data.radar, dither = false, crop = { x = 0, y = 26, w = 600, h = 494 },
+--   colors = { { "#ffffff", "white" }, { "#04e9e7", "dark" }, { "#fd0000", "black" } } }
 function ui.image(t) end
 
 --- The size a node would take, and whether it fits, before drawing it.
@@ -148,8 +180,42 @@ function ui.measure(node, max_w, max_h) end
 --- A line across its parent: horizontal in a column, vertical in a row.
 -- @tparam[opt] table t Options:
 -- @tparam[opt=2] number t.thickness In pixels.
+-- @tparam[opt] bool|table t.dash Dashed: `true` (6 on, 4 off), or `{ on, off }` in pixels.
 -- @treturn Node
 function ui.rule(t) end
+
+--- The first child that fits the space, drawn alone; the last if none does.
+--
+-- "Fits" is as @{measure} has it: nothing cut, no "…", no lines left out, no words broken.
+-- List the versions from the most to the least, and let the space decide; this replaces
+-- measuring each version and keeping the first that fits.
+-- @tparam table t The versions, then options.
+-- @treturn Node
+-- @usage ui.first {
+--   ui.text { race.name, style = "huge" },
+--   ui.text { race.name, style = "large" },
+--   ui.text { race.short, style = "large" },
+-- }
+-- @usage -- With an optional piece, then without:
+-- ui.first {
+--   ui.column { header, table, footnote },
+--   ui.column { header, table },
+-- }
+function ui.first(t) end
+
+--- Children drawn on top of each other, each over the whole space, the first at the bottom.
+--
+-- For maps: a picture, then lines and marks over it. Use images with `transparent = true` above
+-- the first, so what is under them shows through; a column or row draws nothing of its own, so
+-- one can place a mark (`justify = "center", align = "center"`).
+-- @tparam table t The children, then options.
+-- @treturn Node
+-- @usage ui.layers { grow = 1,
+--   ui.image { data.rain, transparent = true, fit = "cover" },
+--   ui.image { data.coast, transparent = true, fit = "cover" },
+--   ui.column { justify = "center", align = "center", ui.text "✚" },
+-- }
+function ui.layers(t) end
 
 --- Empty space that takes whatever is left over (as if `grow = 1`).
 -- @tparam[opt] table t Options.

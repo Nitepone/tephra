@@ -39,7 +39,17 @@
 -- return ui.image { data.photo }
 function blob(bytes) end
 
---- Writes its arguments to the server's log.
+--- Waits. Only in `fetch`, for spacing requests to an API with a rate limit.
+--
+-- The wait counts against fetch's 60 seconds; one that would pass them is an error.
+-- @number seconds Fractions work: `sleep(0.4)`.
+-- @usage for i, id in ipairs(sessions) do
+--   if i > 1 then sleep(0.4) end -- at most 3 requests a second
+--   ...
+-- end
+function sleep(seconds) end
+
+--- Writes its arguments to the server's log, and to the developer API's reports.
 -- @param ... Values to write, separated by spaces.
 function log(...) end
 

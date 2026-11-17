@@ -132,6 +132,34 @@ fn relative(t: i64, now: i64) -> String {
     if d > 0 { format!("in {n} {unit}") } else { format!("{n} {unit} ago") }
 }
 
+/// "90s", "15m", "6h", "2d", "1w", "1h30m" -> seconds.
+pub fn parse_duration(s: &str) -> Result<i64, String> {
+    let bad = || format!("{s:?} is not a duration like \"15m\", \"6h\" or \"1h30m\"");
+    let (mut total, mut num, mut any) = (0i64, String::new(), false);
+    for c in s.trim().chars().filter(|c| !c.is_whitespace()) {
+        if c.is_ascii_digit() {
+            num.push(c);
+            continue;
+        }
+        let unit = match c {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            'd' => 86400,
+            'w' => 604_800,
+            _ => return Err(bad()),
+        };
+        let n: i64 = num.parse().map_err(|_| bad())?;
+        total += n * unit;
+        num.clear();
+        any = true;
+    }
+    if !num.is_empty() || !any {
+        return Err(bad());
+    }
+    Ok(total)
+}
+
 fn int_field(t: &Table, k: &str) -> mlua::Result<Option<i64>> {
     t.get::<Option<i64>>(k)
 }
@@ -226,6 +254,16 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
     time.set(
         "relative",
         lua.create_function(|_, (t, now): (i64, Option<i64>)| Ok(relative(t, now.unwrap_or_else(|| Utc::now().timestamp()))))?,
+    )?;
+
+    time.set(
+        "duration",
+        lua.create_function(|_, v: Value| match v {
+            Value::Integer(n) => Ok(n),
+            Value::Number(n) => Ok(n as i64),
+            Value::String(s) => parse_duration(&s.to_str()?).map_err(mlua::Error::runtime),
+            v => Err(mlua::Error::runtime(format!("a duration like \"1h30m\", not {}", v.type_name()))),
+        })?,
     )?;
 
     lua.globals().set("time", time)?;

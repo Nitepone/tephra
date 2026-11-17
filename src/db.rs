@@ -109,6 +109,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql("ALTER TABLE apps ADD COLUMN prototype INTEGER NOT NULL DEFAULT 0;"),
     // 4: how many grays a device's screen is drawn with (2 or 4).
     Migration::Sql("ALTER TABLE devices ADD COLUMN grays INTEGER NOT NULL DEFAULT 2;"),
+    // 5: when an instance's fetch asked to run next.
+    Migration::Sql("ALTER TABLE app_data ADD COLUMN next_fetch_ms INTEGER;"),
 ];
 
 /// Rewrites each instance's JSON settings as the equivalent Lua config.

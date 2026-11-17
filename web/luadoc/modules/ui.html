@@ -115,6 +115,14 @@ ui.<span class="function-name">column</span> {
 	<td class="summary">A line across its parent: horizontal in a column, vertical in a row.</td>
 	</tr>
 	<tr>
+	<td class="name" nowrap><a href="#first">first(t)</a></td>
+	<td class="summary">The first child that fits the space, drawn alone; the last if none does.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#layers">layers(t)</a></td>
+	<td class="summary">Children drawn on top of each other, each over the whole space, the first at the bottom.</td>
+	</tr>
+	<tr>
 	<td class="name" nowrap><a href="#spacer">spacer([t])</a></td>
 	<td class="summary">Empty space that takes whatever is left over (as if <code>grow = 1</code>).</td>
 	</tr>
@@ -154,12 +162,15 @@ ui.<span class="function-name">column</span> {
         <li><span class="parameter">align</span>
             <span class="types"><span class="type">string</span></span>
          Across: <code>&quot;start&quot;</code>, <code>&quot;center&quot;</code>, <code>&quot;end&quot;</code> or <code>&quot;stretch&quot;</code>.
+ In a row, also <code>&quot;baseline&quot;</code>: the first lines of text line up on their baseline, whatever their
+ sizes (children without text go at the top).
          (<em>default</em> "stretch")
         </li>
         <li><span class="parameter">justify</span>
             <span class="types"><span class="type">string</span></span>
          Along: <code>&quot;start&quot;</code>, <code>&quot;center&quot;</code>, <code>&quot;end&quot;</code> or <code>&quot;between&quot;</code>.
- Ignored when a child grows.
+ Ignored when a child grows. Growing children share the space by <code>grow</code>, whatever their own
+ size: two with <code>grow = 1</code> are equally wide.
          (<em>default</em> "start")
         </li>
         </li></ul>
@@ -212,7 +223,8 @@ ui.<span class="function-name">column</span> {
 
     <h3>Usage:</h3>
     <ul>
-        <pre class="example">ui.<span class="function-name">row</span> { align = <span class="string">"center"</span>, ui.<span class="function-name">text</span> { <span class="string">"72°"</span>, style = <span class="string">"large"</span> }, ui.<span class="function-name">text</span> <span class="string">"Sunny"</span> }</pre>
+        <li><pre class="example">ui.<span class="function-name">row</span> { align = <span class="string">"center"</span>, ui.<span class="function-name">text</span> { <span class="string">"72°"</span>, style = <span class="string">"large"</span> }, ui.<span class="function-name">text</span> <span class="string">"Sunny"</span> }</pre></li>
+        <li><pre class="example">ui.<span class="function-name">row</span> { align = <span class="string">"baseline"</span>, ui.<span class="function-name">text</span> { <span class="string">"72°"</span>, style = <span class="string">"huge"</span> }, ui.<span class="function-name">text</span> <span class="string">"feels 70"</span> }</pre></li>
     </ul>
 
 </dd>
@@ -234,8 +246,9 @@ ui.<span class="function-name">column</span> {
          (<em>default</em> 10)
         </li>
         <li><span class="parameter">border</span>
-            <span class="types"><span class="type">number</span></span>
-         Width of the frame; 0 for none.
+            <span class="types"><span class="type">number</span> or <span class="type">table</span></span>
+         Width of the frame; 0 for none. Or each side's:
+ <code>{ left = 3 }</code>, <code>{ top = 2, bottom = 2 }</code> (sides left out have none).
          (<em>default</em> 2)
         </li>
         <li><span class="parameter">invert</span>
@@ -356,6 +369,18 @@ ui.<span class="function-name">column</span> {
          <code>&quot;left&quot;</code>, <code>&quot;center&quot;</code> or <code>&quot;right&quot;</code>.
          (<em>default</em> "left")
         </li>
+        <li><span class="parameter">tracking</span>
+            <span class="types"><span class="type">number</span></span>
+         Extra space between letters, in pixels: <code>&quot;RACE WEEKEND&quot;</code> set
+ wide, as on a ticket.
+         (<em>default</em> 0)
+        </li>
+        <li><span class="parameter">digits</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;tabular&quot;</code>: every digit as wide as the widest,
+ so numbers line up in columns in any font.
+         (<em>default</em> "proportional")
+        </li>
         </li></ul>
     </ul>
 
@@ -405,6 +430,43 @@ ui.<span class="function-name">column</span> {
  then take the nearest gray.
          (<em>default</em> true)
         </li>
+        <li><span class="parameter">crop</span>
+            <span class="types"><span class="type">table</span></span>
+         Only part of the image: <code>{ x = …, y = …, w = …, h = … }</code>, in the
+ image's own pixels, from its top left corner.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">colors</span>
+            <span class="types"><span class="type">table</span></span>
+         Gray for each color, instead of the colors' brightness: a list of
+ <code>{ &quot;#rrggbb&quot;, gray }</code>, the gray a number (0 black to 255 white) or <code>&quot;black&quot;</code>, <code>&quot;dark&quot;</code>,
+ <code>&quot;light&quot;</code> or <code>&quot;white&quot;</code>. Every pixel takes the gray of the nearest color listed. For maps and
+ charts whose colors mean something, such as radar.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">transparent</span>
+            <span class="types"><span class="type">bool</span></span>
+         Keep the image's transparency: see-through parts leave
+ what is under them, for <a href="../modules/ui.html#layers">layers</a>. Without it, transparency is drawn white.
+         (<em>default</em> false)
+        </li>
+        <li><span class="parameter">blur</span>
+            <span class="types"><span class="type">number</span></span>
+         Soften the image after scaling, by this many pixels: coarse data
+ (radar, a heat map) then comes out as smooth shapes instead of blocks.
+         (<em>default</em> 0)
+        </li>
+        <li><span class="parameter">threshold</span>
+            <span class="types"><span class="type">number</span></span>
+         Black below this gray (0 to 255), white from it, after
+ scaling: for line art such as track maps, without dithering's speckle.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">invert</span>
+            <span class="types"><span class="type">bool</span></span>
+         Light for dark and dark for light.
+         (<em>default</em> false)
+        </li>
         </li></ul>
     </ul>
 
@@ -421,7 +483,10 @@ ui.<span class="function-name">column</span> {
 
     <h3>Usage:</h3>
     <ul>
-        <pre class="example">ui.<span class="function-name">image</span> { data.photo, fit = <span class="string">"cover"</span>, grow = <span class="number">1</span> }</pre>
+        <li><pre class="example">ui.<span class="function-name">image</span> { data.photo, fit = <span class="string">"cover"</span>, grow = <span class="number">1</span> }</pre></li>
+        <li><pre class="example"><span class="comment">-- Light rain dark gray, heavy rain black, the white map left white:
+</span>ui.<span class="function-name">image</span> { data.radar, dither = <span class="keyword">false</span>, crop = { x = <span class="number">0</span>, y = <span class="number">26</span>, w = <span class="number">600</span>, h = <span class="number">494</span> },
+  colors = { { <span class="string">"#ffffff"</span>, <span class="string">"white"</span> }, { <span class="string">"#04e9e7"</span>, <span class="string">"dark"</span> }, { <span class="string">"#fd0000"</span>, <span class="string">"black"</span> } } }</pre></li>
     </ul>
 
 </dd>
@@ -510,6 +575,11 @@ ui.<span class="function-name">column</span> {
          In pixels.
          (<em>default</em> 2)
         </li>
+        <li><span class="parameter">dash</span>
+            <span class="types"><span class="type">bool</span> or <span class="type">table</span></span>
+         Dashed: <code>true</code> (6 on, 4 off), or <code>{ on, off }</code> in pixels.
+         (<em>optional</em>)
+        </li>
         </li></ul>
     </ul>
 
@@ -524,6 +594,93 @@ ui.<span class="function-name">column</span> {
 
 
 
+
+</dd>
+    <dt>
+    <a name = "first"></a>
+    <strong>first(t)</strong>
+    </dt>
+    <dd>
+    The first child that fits the space, drawn alone; the last if none does. </p>
+
+<p> "Fits" is as <a href="../modules/ui.html#measure">measure</a> has it: nothing cut, no "…", no lines left out, no words broken.
+ List the versions from the most to the least, and let the space decide; this replaces
+ measuring each version and keeping the first that fits.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         The versions, then options.
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <li><pre class="example">ui.<span class="function-name">first</span> {
+  ui.<span class="function-name">text</span> { race.name, style = <span class="string">"huge"</span> },
+  ui.<span class="function-name">text</span> { race.name, style = <span class="string">"large"</span> },
+  ui.<span class="function-name">text</span> { race.short, style = <span class="string">"large"</span> },
+}</pre></li>
+        <li><pre class="example"><span class="comment">-- With an optional piece, then without:
+</span>ui.<span class="function-name">first</span> {
+  ui.<span class="function-name">column</span> { header, <span class="global">table</span>, footnote },
+  ui.<span class="function-name">column</span> { header, <span class="global">table</span> },
+}</pre></li>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "layers"></a>
+    <strong>layers(t)</strong>
+    </dt>
+    <dd>
+    Children drawn on top of each other, each over the whole space, the first at the bottom. </p>
+
+<p> For maps: a picture, then lines and marks over it. Use images with <code>transparent = true</code> above
+ the first, so what is under them shows through; a column or row draws nothing of its own, so
+ one can place a mark (<code>justify = &quot;center&quot;, align = &quot;center&quot;</code>).
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         The children, then options.
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">layers</span> { grow = <span class="number">1</span>,
+  ui.<span class="function-name">image</span> { data.rain, transparent = <span class="keyword">true</span>, fit = <span class="string">"cover"</span> },
+  ui.<span class="function-name">image</span> { data.coast, transparent = <span class="keyword">true</span>, fit = <span class="string">"cover"</span> },
+  ui.<span class="function-name">column</span> { justify = <span class="string">"center"</span>, align = <span class="string">"center"</span>, ui.<span class="function-name">text</span> <span class="string">"✚"</span> },
+}</pre>
+    </ul>
 
 </dd>
     <dt>
@@ -589,6 +746,21 @@ ui.<span class="function-name">column</span> {
          A fixed height in pixels.
          (<em>optional</em>)
         </li>
+        <li><span class="parameter">fill</span>
+            <span class="types"><span class="type">string</span></span>
+         A background: <code>&quot;black&quot;</code>, <code>&quot;dark&quot;</code> (dark gray), <code>&quot;light&quot;</code> (light
+ gray) or <code>&quot;white&quot;</code>; or a pattern of black on white, the same with 2 grays as with 4:
+ <code>&quot;hatch&quot;</code> (diagonal lines), <code>&quot;crosshatch&quot;</code> or <code>&quot;dots&quot;</code>. What is drawn on it is white on
+ <code>&quot;black&quot;</code> and <code>&quot;dark&quot;</code>, black on the others. With 2 grays, <code>&quot;dark&quot;</code> is drawn black and
+ <code>&quot;light&quot;</code> white.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">color</span>
+            <span class="types"><span class="type">string</span></span>
+         The color of the node's text and lines, and its children's: the
+ same four names. With 2 grays, <code>&quot;dark&quot;</code> is black and <code>&quot;light&quot;</code> white.
+         (<em>optional</em>)
+        </li>
     </ul>
 
 
@@ -603,7 +775,7 @@ ui.<span class="function-name">column</span> {
 </div> <!-- id="main" -->
 <div id="about">
 <i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
-<i style="float:right;">Last updated 2026-11-16 23:37:50 </i>
+<i style="float:right;">Last updated 2026-11-17 03:11:47 </i>
 </div> <!-- id="about" -->
 </div> <!-- id="container" -->
 </body>

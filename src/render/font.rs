@@ -82,6 +82,10 @@ pub struct TextStyle {
     /// Soften the edges: shaded with 4 grays, dithered with 2. `None` (the default) does so with
     /// 4 grays, and with 2 only for text of `SMOOTH_MIN_SIZE` and up, where dithering helps.
     pub smooth: Option<bool>,
+    /// Extra space between letters, in pixels (may be negative).
+    pub tracking: f32,
+    /// Every digit as wide as the widest, so numbers line up in columns.
+    pub tabular: bool,
 }
 
 /// One glyph placed on a line.
@@ -128,7 +132,7 @@ impl TextStyle {
             "huge" => (96.0, true),
             _ => return None,
         };
-        Some(Self { size, bold, italic: false, face: Face::Sans, smooth: None })
+        Some(Self { size, bold, italic: false, face: Face::Sans, smooth: None, tracking: 0.0, tabular: false })
     }
 
     fn primary(&self) -> &'static FontRef<'static> {
@@ -166,23 +170,36 @@ impl TextStyle {
         let mut out = Vec::with_capacity(text.len());
         let mut pen = 0.0;
         let mut prev: Option<(&FontRef, GlyphId)> = None;
-        for c in text.chars() {
+        for (i, c) in text.chars().enumerate() {
             let (f, scale, id) = chain
                 .iter()
                 .find(|(f, _)| has(f, c))
                 .map(|(f, s)| (*f, *s, f.glyph_id(c)))
                 .unwrap_or((chain[0].0, chain[0].1, GlyphId(0)));
             let s = f.as_scaled(scale);
+            if i > 0 {
+                pen += self.tracking;
+            }
+            let digit = self.tabular && c.is_ascii_digit();
             if let Some((pf, pid)) = prev
                 && std::ptr::eq(pf, f)
+                && !digit
             {
                 pen += s.kern(pid, id);
             }
-            out.push(Placed { font: f, scale, id, x: pen });
-            pen += s.h_advance(id);
+            let advance = s.h_advance(id);
+            if digit {
+                // Centered in a cell as wide as the widest digit.
+                let cell = ('0'..='9').map(|d| s.h_advance(f.glyph_id(d))).fold(0.0, f32::max);
+                out.push(Placed { font: f, scale, id, x: pen + (cell - advance) / 2.0 });
+                pen += cell;
+            } else {
+                out.push(Placed { font: f, scale, id, x: pen });
+                pen += advance;
+            }
             prev = Some((f, id));
         }
-        (out, pen)
+        (out, pen.max(0.0))
     }
 
     /// The characters of `text` that no bundled font has, each once.

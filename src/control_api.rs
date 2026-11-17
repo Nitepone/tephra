@@ -181,7 +181,7 @@ struct ScreenOut {
 async fn get_screen(State(s): State<SharedState>, Path(id): Path<i64>) -> ApiResult<Json<ScreenOut>> {
     let d = device_or_404(&s, id)?;
     let screen = model::screen(&s.db.conn(), id)?;
-    Ok(Json(ScreenOut { screen, refresh_s: display::refresh_s(&s, &d)? }))
+    Ok(Json(ScreenOut { screen, refresh_s: display::refresh_s(&s, &d, None)? }))
 }
 
 fn check_screen(s: &SharedState, mut cfg: ScreenConfig) -> ApiResult<ScreenConfig> {

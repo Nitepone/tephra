@@ -107,4 +107,12 @@ function time.add(t, amount, zone) end
 -- @treturn string
 function time.relative(t, now) end
 
+--- Seconds in a duration: `"90s"`, `"15m"`, `"6h"`, `"2d"`, `"1w"`, or several, `"1h30m"`. A
+-- number is taken as seconds already.
+-- @tparam string|number d
+-- @treturn int
+-- @raise When `d` isn't a duration.
+-- @usage time.add(t, { seconds = time.duration(config.lead) })
+function time.duration(d) end
+
 return time

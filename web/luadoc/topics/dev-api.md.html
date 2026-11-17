@@ -76,6 +76,10 @@ tephra runs on</strong> (<code>127.0.0.1</code> or <code>::1</code>). Anywhere e
     <li><code>code</code>: the app's code (required).</li>
     <li><code>validate</code>: its config check. Runs when not empty.</li>
     <li><code>config</code>: an instance config, such as <code>&quot;units = &apos;imperial&apos;&quot;</code>.</li>
+    <li><code>now</code>: the time the app sees as now, in <code>time.now()</code>, <code>os.time()</code> and <code>os.date()</code>: seconds
+    since 1970, or text like <code>&quot;2026-11-22T13:00:00Z&quot;</code>. For trying a weekend's phases without
+    shifting the test data.</li>
+    <li><code>previous</code>: what <code>fetch</code> gets as its previous result.</li>
 </ul>
 
 <p><a name="POST__api_v1_dev_fetch"></a></p>
@@ -99,6 +103,9 @@ curl -s localhost:<span class="number">8374</span>/api/v1/dev/fetch \
 { <span class="string">"ok"</span>: <span class="keyword">true</span>, <span class="string">"data"</span>: { ... }, <span class="string">"fetch"</span>: { <span class="string">"ms"</span>: <span class="number">812</span>, <span class="string">"limit_ms"</span>: <span class="number">60000</span> } }
 </pre>
 
+<p><code>fetch</code> also has <code>refresh_at</code>, when the app asked to fetch next (<code>{ refresh = … }</code>), and <code>log</code>,
+the lines it wrote with <code>log()</code> or <code>print()</code>.</p>
+
 <p><a name="POST__api_v1_dev_render"></a></p>
 <h2>POST /api/v1/dev/render</h2>
 
@@ -106,18 +113,21 @@ curl -s localhost:<span class="number">8374</span>/api/v1/dev/fetch \
 sizes. Besides the app, it takes:</p>
 
 <ul>
-    <li><code>data</code>: render with this instead of running <code>fetch</code>.</li>
-    <li><code>size</code>: <code>&quot;full&quot;</code> (the default), <code>&quot;large&quot;</code>, <code>&quot;half&quot;</code> or <code>&quot;small&quot;</code>. Or <code>sizes</code>: a list of them, or
-    <code>&quot;all&quot;</code>.</li>
-    <li><code>w</code>, <code>h</code>: the panel, 800 × 480 by default.</li>
-    <li><code>title_bar</code>: draw the slot's title bar, as most slots on a device have (default <code>true</code>). It
-    takes 30 pixels from the app.</li>
-    <li><code>grays</code>: <code>2</code> (the default) or <code>4</code>, as a device's <strong>Grays</strong> setting. With <code>4</code>, the image is a
+    <li><p><code>data</code>: render with this instead of running <code>fetch</code>.</p></li>
+    <li><p><code>size</code>: <code>&quot;full&quot;</code> (the default), <code>&quot;large&quot;</code>, <code>&quot;half&quot;</code> or <code>&quot;small&quot;</code>. Or <code>sizes</code>: a list of them, or
+    <code>&quot;all&quot;</code>.</p></li>
+    <li><p><code>w</code>, <code>h</code>: the panel, 800 × 480 by default.</p></li>
+    <li><p><code>title_bar</code>: draw the slot's title bar, as most slots on a device have (default <code>true</code>). It
+    takes 30 pixels from the app.</p></li>
+    <li><p><code>grays</code>: <code>2</code> (the default) or <code>4</code>, as a device's <strong>Grays</strong> setting. With <code>4</code>, the image is a
     2-bit PNG when anything on it is gray, and <code>png_bits</code> in the report says which it was. A
-    2-bit image larger than an OG accepts is sent as 1-bit, dithered, and <code>problems</code> says so.</li>
-    <li><code>format</code>: <code>&quot;png&quot;</code> for an image instead of the JSON report (also <code>?format=png</code>). One size gives
+    2-bit image larger than an OG accepts is sent as 1-bit, dithered, and <code>problems</code> says so.</p></li>
+    <li><p><code>format</code>: <code>&quot;png&quot;</code> for an image instead of the JSON report (also <code>?format=png</code>). One size gives
     the device image; several give a sheet of them, labelled. If anything fails, the answer is the
-    JSON report instead, with status <code>422</code>.</li>
+    JSON report instead, with status <code>422</code>.</p></li>
+    <li><p><code>at</code>: a list of times (as <code>now</code>) to render at: every size at each time, at most 24 renders.
+    <code>fetch</code>, if it runs, runs once, at the first.</p></li>
+    <li><p><code>slow_ms</code>: report renders slower than this in <code>problems</code> (default 1000, half the limit).</p></li>
 </ul>
 
 <p>Every size is drawn as its own device screen: the app in the first slot of a layout with that
@@ -173,11 +183,14 @@ curl -s localhost:<span class="number">8374</span>/api/v1/dev/render \
     <li><code>fetch</code>: <code>null</code> when <code>data</code> was given or the app has no <code>fetch</code>; otherwise its time and any error.</li>
     <li><code>slot</code>: the space the app drew into, in panel pixels. <code>layout</code> uses the same coordinates.</li>
     <li><code>png</code>: the device image as base64. <code>jq -r &apos;.renders[0].png&apos; | base64 -d &gt; half.png</code> saves it.</li>
-    <li><code>problems</code>: everything in <code>layout</code> worth a look, in words; also a render that took more than
-    half its limit, and an image larger than the 90,000 bytes an OG accepts.</li>
+    <li><code>problems</code>: everything in <code>layout</code> worth a look, in words; also a render slower than
+    <code>slow_ms</code>, and an image larger than the 90,000 bytes an OG accepts.</li>
+    <li><code>at</code>: the time the app saw as now, when one was given; <code>redraw_at</code>: when render asked to be
+    drawn again (<code>{ redraw_at = … }</code>); <code>log</code>: what it wrote with <code>log()</code> or <code>print()</code>.</li>
     <li><code>layout</code>: every node, in drawing order. <code>path</code> is <code>root</code>, then child indexes counted from 0, so
     <code>root/2/1</code> is the second child of the root's third child. <code>kind</code> is <code>column</code>, <code>row</code>, <code>box</code>,
-    <code>text</code>, <code>image</code>, <code>rule</code> or <code>spacer</code>.</li>
+    <code>layers</code>, <code>first</code>, <code>text</code>, <code>image</code>, <code>rule</code> or <code>spacer</code>. A <code>first</code> adds <code>chosen</code>: which of its
+    children fitted and was drawn (its path continues with that index).</li>
     <li>Text nodes add <code>text</code> (its first 80 characters), <code>size</code> (its height in pixels) and <code>lines</code>
     (lines drawn). Images add <code>image</code>: source width and height, then drawn width and height.</li>
     <li><code>overflow_px</code>, on a column: how many pixels taller its children wanted to be than it is.</li>
@@ -281,7 +294,7 @@ has 60, and each may use 64 MB. <code>ms</code> and <code>limit_ms</code> show h
 </div> <!-- id="main" -->
 <div id="about">
 <i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
-<i style="float:right;">Last updated 2026-11-16 23:37:50 </i>
+<i style="float:right;">Last updated 2026-11-17 03:11:47 </i>
 </div> <!-- id="about" -->
 </div> <!-- id="container" -->
 </body>

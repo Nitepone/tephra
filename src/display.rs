@@ -22,6 +22,12 @@ pub struct Draft {
 
 /// The device's screen as the PNG it downloads.
 pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draft>) -> anyhow::Result<Vec<u8>> {
+    Ok(render_screen(state, device, draft).await?.0)
+}
+
+/// The device's screen as the PNG it downloads, and the soonest time (seconds since 1970) one of
+/// its apps asked to be drawn again.
+pub async fn render_screen(state: &SharedState, device: &Device, draft: Option<Draft>) -> anyhow::Result<(Vec<u8>, Option<i64>)> {
     let draft = draft.unwrap_or_default();
     let (cfg, instances) = {
         let c = state.db.conn();
@@ -47,8 +53,9 @@ pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draf
         let title_bars: Vec<bool> = cfg.slots.iter().map(|s| s.title_bar && s.instance_id.is_some()).collect();
         let geoms = screen::geometry(p, device.width, device.height, &title_bars);
         if cfg.slots.iter().all(|s| s.instance_id.is_none()) {
-            return welcome(&state, &device).to_png();
+            return Ok((welcome(&state, &device).to_png()?, None));
         }
+        let mut redraw_at = None::<i64>;
         let slots: Vec<SlotDraw> = geoms
             .iter()
             .zip(&cfg.slots)
@@ -60,13 +67,21 @@ pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draf
                     None => Err(format!("the app {:?} is not installed", inst.app)),
                     Some(app) => {
                         let slot = Slot { w: g.content.w, h: g.content.h, size: g.size, grays: device.grays };
-                        apps::render(&app, &inst.config, &inst.data, slot, &state.cfg.data_dir)
+                        apps::render_with(&app, &inst.config, &inst.data, slot, &state.cfg.data_dir, &apps::RunOpts::default())
+                            .map(|r| {
+                                if let Some(t) = r.redraw_at {
+                                    redraw_at = Some(redraw_at.map_or(t, |s| s.min(t)));
+                                }
+                                r.node
+                            })
+                            .map_err(|f| f.short())
                     }
                 };
                 SlotDraw { geom: *g, content: Some(content), title: inst.name.clone() }
             })
             .collect();
-        screen::compose(device.width, device.height, device.grays, p.slots.len() > 1, &slots).to_device_png(crate::render::OG_IMAGE_LIMIT)
+        let png = screen::compose(device.width, device.height, device.grays, p.slots.len() > 1, &slots).to_device_png(crate::render::OG_IMAGE_LIMIT)?;
+        Ok((png, redraw_at))
     })
     .await?
 }
@@ -93,16 +108,27 @@ pub fn identify_png(d: &Device) -> anyhow::Result<Vec<u8>> {
     screen::message_screen(d.width, d.height, lines).to_png()
 }
 
-/// The refresh interval to hand the device: the most frequent app on its screen, within the
-/// device's bounds.
-pub fn refresh_s(state: &SharedState, device: &Device) -> anyhow::Result<u64> {
+/// The refresh interval to hand the device, within its bounds: the most frequent app on its
+/// screen, or sooner if a fetch asked to run (or a render to be drawn, at `redraw_at`) before then.
+pub fn refresh_s(state: &SharedState, device: &Device, redraw_at: Option<i64>) -> anyhow::Result<u64> {
     let c = state.db.conn();
     let cfg = model::screen(&c, device.id)?;
+    let now = now_ms() / 1000;
     let mut shortest = None::<u64>;
+    let mut sooner = |s: u64| shortest = Some(shortest.map_or(s, |x: u64| x.min(s)));
     for id in cfg.slots.iter().filter_map(|s| s.instance_id) {
-        if let Some(app) = model::instance(&c, id)?.and_then(|i| state.apps.get(&i.app)) {
-            shortest = Some(shortest.map_or(app.refresh_s, |s| s.min(app.refresh_s)));
+        let Some(inst) = model::instance(&c, id)? else { continue };
+        let Some(app) = state.apps.get(&inst.app) else { continue };
+        match inst.next_fetch_ms {
+            // Come back just after the fetch the app asked for has run (the scheduler looks
+            // every 20 s).
+            Some(next) => sooner((next / 1000 - now + 30).max(60) as u64),
+            None => sooner(app.refresh_s),
         }
+    }
+    if let Some(t) = redraw_at {
+        // A few seconds late rather than early: the image is drawn when the device asks.
+        sooner((t - now + 5).max(60) as u64);
     }
     let lo = (device.refresh_min_s as u64).max(60);
     let hi = (device.refresh_max_s as u64).max(lo);
@@ -140,7 +166,8 @@ pub async fn fetch_instance(state: &SharedState, id: i64) -> anyhow::Result<Resu
     }
     let config = inst.config.clone();
     let data_dir = state.cfg.data_dir.clone();
-    let result = tokio::task::spawn_blocking(move || apps::fetch(&app, &config, &data_dir)).await?;
+    let previous = inst.data.clone();
+    let result = tokio::task::spawn_blocking(move || apps::fetch(&app, &config, &previous, &data_dir).map(|f| (f.data, f.next.map(|t| t * 1000)))).await?;
     let c = state.db.conn();
     if let Err(e) = &result {
         // Log a failure once, not on every retry.
@@ -167,8 +194,14 @@ pub async fn scheduler(state: SharedState) {
                         return false;
                     }
                     // After a failure, try again sooner (but not more than once a minute).
-                    let every = if i.error.is_some() { app.refresh_s.min(300) } else { app.refresh_s };
-                    i.fetched_ms.is_none_or(|t| now_ms() - t >= every as i64 * 1000)
+                    if i.error.is_some() {
+                        return i.fetched_ms.is_none_or(|t| now_ms() - t >= app.refresh_s.min(300) as i64 * 1000);
+                    }
+                    // When the last fetch asked to run next, or after the app's refresh.
+                    match i.next_fetch_ms {
+                        Some(next) => now_ms() >= next,
+                        None => i.fetched_ms.is_none_or(|t| now_ms() - t >= app.refresh_s as i64 * 1000),
+                    }
                 })
                 .map(|i| i.id)
                 .collect(),
@@ -215,7 +248,7 @@ pub async fn try_app(state: &SharedState, app: apps::AppMeta, config: String, w:
         let geoms = screen::geometry(p, w, h, &title_bars);
         let g = geoms[0];
         let content = (|| {
-            let data = if app.has_fetch { apps::fetch(&app, &config, &data_dir)? } else { serde_json::Value::Null };
+            let data = if app.has_fetch { apps::fetch(&app, &config, &serde_json::Value::Null, &data_dir)?.data } else { serde_json::Value::Null };
             apps::render(&app, &config, &data, Slot { w: g.content.w, h: g.content.h, size: g.size, grays }, &data_dir)
         })();
         let mut slots = vec![SlotDraw { geom: g, content: Some(content), title: app.name.clone() }];

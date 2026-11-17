@@ -22,6 +22,8 @@ pub enum Align {
     End,
     #[default]
     Stretch,
+    /// Rows only: children placed so their first lines of text share a baseline.
+    Baseline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -48,6 +50,41 @@ pub enum Fit {
     Cover,
 }
 
+/// A width for each side, such as a box's border.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Edges {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl Edges {
+    pub const ZERO: Edges = Edges { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+    pub fn uniform(v: f32) -> Edges {
+        Edges { top: v, right: v, bottom: v, left: v }
+    }
+    fn any(&self) -> bool {
+        self.top > 0.0 || self.right > 0.0 || self.bottom > 0.0 || self.left > 0.0
+    }
+    /// With `padding` inside each side, in whole pixels: (left, top, right, bottom).
+    fn inset(&self, padding: f32) -> (i32, i32, i32, i32) {
+        let r = |v: f32| (padding + v).round() as i32;
+        (r(self.left), r(self.top), r(self.right), r(self.bottom))
+    }
+}
+
+/// A background: a gray, or a pattern of black on white.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fill {
+    Gray(u8),
+    /// Diagonal lines.
+    Hatch,
+    /// Diagonal lines both ways.
+    Cross,
+    Dots,
+}
+
 /// What every node may set.
 #[derive(Debug, Clone, Default)]
 pub struct Common {
@@ -55,6 +92,11 @@ pub struct Common {
     pub grow: f32,
     pub width: Option<f32>,
     pub height: Option<f32>,
+    /// A background, drawn before the node. Its content is drawn white on dark fills and black
+    /// on light ones and patterns, unless `color` says otherwise.
+    pub fill: Option<Fill>,
+    /// The color of the node's text and lines, and its children's.
+    pub color: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,9 +107,9 @@ pub enum Node {
         gap: f32,
         align: Align,
         justify: Justify,
-        /// Only set for `box`: padding, border width and white-on-black.
+        /// Only set for `box`: padding, border widths and white-on-black.
         padding: f32,
-        border: f32,
+        border: Edges,
         invert: bool,
         common: Common,
     },
@@ -81,14 +123,35 @@ pub enum Node {
         shrink_to: Option<f32>,
         common: Common,
     },
+    /// The first child that fits the space uncut; the last if none does.
+    First {
+        children: Vec<Node>,
+        common: Common,
+    },
+    /// Children drawn on top of each other, each over the whole space, in order.
+    Layers {
+        children: Vec<Node>,
+        common: Common,
+    },
     Image {
         img: Arc<GrayImage>,
+        /// Where the image is see-through (below 128), for images with transparency kept.
+        mask: Option<Arc<GrayImage>>,
         fit: Fit,
         dither: bool,
+        /// Softens the image after scaling (a Gaussian blur of this many pixels), so coarse
+        /// data such as radar comes out as smooth shapes.
+        blur: f32,
+        /// Black below this gray and white from it, after scaling: no dithering, no grays.
+        threshold: Option<u8>,
+        /// Light for dark and dark for light.
+        invert: bool,
         common: Common,
     },
     Rule {
         thickness: f32,
+        /// Dashes: (on, off) lengths in pixels.
+        dash: Option<(f32, f32)>,
         common: Common,
     },
     Spacer {
@@ -121,6 +184,9 @@ pub struct LayoutEntry {
     pub cut: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub missing: Option<String>,
+    /// `first`: which child fitted (counting from 0), and was drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chosen: Option<usize>,
     /// Containers: how many pixels the children needed beyond the space there was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow_px: Option<i32>,
@@ -141,6 +207,8 @@ impl Node {
             Node::Stack { common, .. }
             | Node::Text { common, .. }
             | Node::Image { common, .. }
+            | Node::Layers { common, .. }
+            | Node::First { common, .. }
             | Node::Rule { common, .. }
             | Node::Spacer { common } => common,
         }
@@ -167,7 +235,7 @@ impl Node {
             align: Align::Stretch,
             justify: Justify::Start,
             padding: 0.0,
-            border: 0.0,
+            border: Edges::ZERO,
             invert: false,
             common: Common::default(),
         }
@@ -203,24 +271,108 @@ impl Node {
                 Dir::Row => Size { w: *thickness, h: 0.0 },
             },
             Node::Spacer { .. } => Size { w: 0.0, h: 0.0 },
-            Node::Stack { dir, children, gap, padding, border, .. } => {
+            Node::Layers { children, .. } => children.iter().fold(Size { w: 0.0, h: 0.0 }, |acc, ch| {
+                let s = ch.measure(max_w, max_h, parent);
+                Size { w: acc.w.max(s.w), h: acc.h.max(s.h) }
+            }),
+            Node::First { children, .. } => match children.get(self.choose(max_w, max_h)) {
+                Some(ch) => ch.measure(max_w, max_h, parent),
+                None => Size { w: 0.0, h: 0.0 },
+            },
+            Node::Stack { dir, children, gap, padding, border, align, .. } => {
                 // Rounded as `draw` rounds it.
-                let inset = 2.0 * (padding + border).round();
-                let (iw, ih) = ((max_w - inset).max(0.0), (max_h - inset).max(0.0));
+                let (l, t, r, b) = border.inset(*padding);
+                let (inset_w, inset_h) = ((l + r) as f32, (t + b) as f32);
+                let (iw, ih) = ((max_w - inset_w).max(0.0), (max_h - inset_h).max(0.0));
                 let sizes = measure_children(*dir, children, *gap, iw, ih);
                 let n = children.len().max(1) as f32;
-                let (main, cross) = sizes.iter().fold((gap * (n - 1.0), 0.0f32), |(m, x), s| {
+                // Growing children share the leftover space equally (by `grow`), whatever their
+                // own size, so the space must give each its share of the one that needs most.
+                let total_grow: f32 = children.iter().map(|c| c.common().grow.max(0.0)).sum();
+                let (mut fixed, mut per_grow, mut cross) = (0.0f32, 0.0f32, 0.0f32);
+                for (ch, s) in children.iter().zip(&sizes) {
                     let (sm, sx) = split(*dir, *s);
-                    (m + sm, x.max(sx))
-                });
+                    let g = ch.common().grow;
+                    if g > 0.0 { per_grow = per_grow.max(sm / g) } else { fixed += sm }
+                    cross = cross.max(sx);
+                }
+                let main = (gap * (n - 1.0) + fixed + per_grow * total_grow).min(split(*dir, Size { w: iw, h: ih }).0.max(fixed));
+                if *dir == Dir::Row && *align == Align::Baseline {
+                    let (above, below) = baseline_extents(children, &sizes);
+                    cross = cross.max(above + below);
+                }
                 let (w, h) = join(*dir, main, cross);
-                Size { w: w + inset, h: h + inset }
+                Size { w: w + inset_w, h: h + inset_h }
             }
         };
         // Whole pixels, rounded up: a node given what it measured never comes up short.
         Size {
             w: c.width.unwrap_or(s.w).ceil().min(max_w),
             h: c.height.unwrap_or(s.h).ceil().min(max_h),
+        }
+    }
+
+    /// For `First`: which child to draw in `w` x `h` (either may be unlimited).
+    fn choose(&self, w: f32, h: f32) -> usize {
+        let Node::First { children, .. } = self else { return 0 };
+        for (i, ch) in children.iter().enumerate().take(children.len().saturating_sub(1)) {
+            let s = ch.measure(w, h, Dir::Column);
+            let (tw, th) = (if w.is_finite() { w } else { s.w }, if h.is_finite() { h } else { s.h });
+            if ch.trial(tw, th).0.iter().all(|c| *c == "missing_glyph") {
+                return i;
+            }
+        }
+        children.len().saturating_sub(1)
+    }
+
+    /// Lays this node out in `w` x `h` exactly as a render would, on a scratch canvas: what was
+    /// cut, sorted (with `overflow` for children that needed more room), and the characters no
+    /// font has.
+    pub fn trial(&self, w: f32, h: f32) -> (Vec<&'static str>, String) {
+        let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
+        let mut cv = Canvas::new(w as u32, h as u32);
+        cv.report = Some(Vec::new());
+        self.draw(&mut cv, Rect::new(0, 0, w as i32, h as i32), BLACK, Dir::Column);
+        let report = cv.report.take().unwrap_or_default();
+        let mut cut: Vec<&'static str> = report.iter().flat_map(|e| e.cut.iter().copied()).collect();
+        if report.iter().any(|e| e.overflow_px.is_some()) {
+            cut.push("overflow");
+        }
+        cut.sort();
+        cut.dedup();
+        (cut, report.iter().filter_map(|e| e.missing.as_deref()).collect())
+    }
+
+    /// How far below the top of this node, drawn `w` wide, its first line of text sits on its
+    /// baseline; None if it has no text.
+    fn baseline(&self, w: f32, h: f32) -> Option<f32> {
+        match self {
+            Node::Text { text, style, wrap, max_lines, shrink_to, .. } => {
+                let st = match shrink_to {
+                    Some(min) => shrunk(text, *style, *wrap, *max_lines, *min, Rect::new(0, 0, w as i32, h as i32)),
+                    None => *style,
+                };
+                Some(st.ascent())
+            }
+            Node::Stack { dir, children, gap, padding, border, .. } => {
+                let (l, t, r, b) = border.inset(*padding);
+                let inset = t as f32;
+                let (iw, ih) = ((w - (l + r) as f32).max(0.0), (h - (t + b) as f32).max(0.0));
+                let sizes = measure_children(*dir, children, *gap, iw, ih);
+                let mut offset = 0.0;
+                for (ch, s) in children.iter().zip(&sizes) {
+                    if let Some(b) = ch.baseline(if *dir == Dir::Row { s.w } else { iw }, s.h) {
+                        return Some(inset + offset + b);
+                    }
+                    if *dir == Dir::Column {
+                        offset += s.h + gap;
+                    }
+                }
+                None
+            }
+            Node::Layers { children, .. } => children.iter().find_map(|c| c.baseline(w, h)),
+            Node::First { children, .. } => children.get(self.choose(w, h)).and_then(|c| c.baseline(w, h)),
+            _ => None,
         }
     }
 
@@ -236,11 +388,13 @@ impl Node {
 
     fn kind(&self) -> &'static str {
         match self {
-            Node::Stack { invert, border, padding, .. } if *invert || *border > 0.0 || *padding > 0.0 => "box",
+            Node::Stack { invert, border, padding, .. } if *invert || border.any() || *padding > 0.0 => "box",
             Node::Stack { dir: Dir::Row, .. } => "row",
             Node::Stack { .. } => "column",
             Node::Text { .. } => "text",
             Node::Image { .. } => "image",
+            Node::Layers { .. } => "layers",
+            Node::First { .. } => "first",
             Node::Rule { .. } => "rule",
             Node::Spacer { .. } => "spacer",
         }
@@ -262,6 +416,7 @@ impl Node {
             lines: None,
             cut: Vec::new(),
             missing: None,
+            chosen: None,
             overflow_px: None,
             image: None,
         };
@@ -285,6 +440,37 @@ impl Node {
         let me = self.report(cv, r);
         if r.w <= 0 || r.h <= 0 {
             return;
+        }
+        let mut ink = ink;
+        let c = self.common();
+        match c.fill {
+            Some(Fill::Gray(f)) => {
+                let f = cv.quantize(f as f32);
+                cv.fill(r, f);
+                ink = if f < 128 { WHITE } else { BLACK };
+            }
+            Some(pattern) => {
+                cv.fill(r, WHITE);
+                // On the canvas's own grid, so neighbouring patterns line up.
+                let on = |x: i32, y: i32| match pattern {
+                    Fill::Hatch => (x + y).rem_euclid(6) == 0,
+                    Fill::Cross => (x + y).rem_euclid(6) == 0 || (x - y).rem_euclid(6) == 0,
+                    Fill::Dots => x.rem_euclid(4) == 0 && y.rem_euclid(4) == 0,
+                    Fill::Gray(_) => false,
+                };
+                for y in r.y..r.y + r.h {
+                    for x in r.x..r.x + r.w {
+                        if on(x, y) {
+                            cv.set(x, y, BLACK);
+                        }
+                    }
+                }
+                ink = BLACK;
+            }
+            None => {}
+        }
+        if let Some(color) = c.color {
+            ink = cv.quantize(color as f32);
         }
         // What a node may draw on. Text may reach a little above and below its box, as accents
         // and descenders do in fonts whose lines leave them no room; never sideways. Containers
@@ -334,7 +520,7 @@ impl Node {
                     style.draw(cv, x.round(), r.y as f32 + i as f32 * lh, &line, ink);
                 }
             }
-            Node::Image { img, fit, dither, .. } => {
+            Node::Image { img, mask, fit, dither, blur, threshold, invert, .. } => {
                 let (iw, ih) = (img.width() as f32, img.height() as f32);
                 let scale = match fit {
                     Fit::Contain => (r.w as f32 / iw).min(r.h as f32 / ih),
@@ -344,19 +530,64 @@ impl Node {
                 if let Some(e) = Self::entry(cv, me) {
                     e.image = Some([img.width(), img.height(), w, h]);
                 }
-                let resized = image::imageops::resize(img.as_ref(), w, h, image::imageops::FilterType::Triangle);
+                let soften = |i: image::GrayImage| if *blur > 0.0 { image::imageops::blur(&i, *blur) } else { i };
+                let mut resized = soften(image::imageops::resize(img.as_ref(), w, h, image::imageops::FilterType::Triangle));
+                if *invert || threshold.is_some() {
+                    for p in resized.pixels_mut() {
+                        let v = if *invert { 255 - p.0[0] } else { p.0[0] };
+                        p.0[0] = match threshold {
+                            Some(t) => if v >= *t { WHITE } else { BLACK },
+                            None => v,
+                        };
+                    }
+                }
+                let mask = mask.as_ref().map(|m| soften(image::imageops::resize(m.as_ref(), w, h, image::imageops::FilterType::Triangle)));
                 let x = r.x + (r.w - w as i32) / 2;
                 let y = r.y + (r.h - h as i32) / 2;
-                cv.draw_gray(&resized, x, y, *dither);
+                cv.draw_gray_masked(&resized, mask.as_ref(), x, y, *dither);
             }
-            Node::Rule { thickness, .. } => {
+            Node::Rule { thickness, dash, .. } => {
                 let t = thickness.round() as i32;
-                match parent {
-                    Dir::Column => cv.fill(Rect::new(r.x, r.y + (r.h - t) / 2, r.w, t), ink),
-                    Dir::Row => cv.fill(Rect::new(r.x + (r.w - t) / 2, r.y, t, r.h), ink),
+                let line = match parent {
+                    Dir::Column => Rect::new(r.x, r.y + (r.h - t) / 2, r.w, t),
+                    Dir::Row => Rect::new(r.x + (r.w - t) / 2, r.y, t, r.h),
+                };
+                match dash {
+                    None => cv.fill(line, ink),
+                    Some((on, off)) => {
+                        let (on, off) = (on.round().max(1.0) as i32, off.round().max(1.0) as i32);
+                        let len = if parent == Dir::Column { line.w } else { line.h };
+                        let mut at = 0;
+                        while at < len {
+                            let n = on.min(len - at);
+                            cv.fill(
+                                if parent == Dir::Column { Rect::new(line.x + at, line.y, n, line.h) } else { Rect::new(line.x, line.y + at, line.w, n) },
+                                ink,
+                            );
+                            at += on + off;
+                        }
+                    }
                 }
             }
             Node::Spacer { .. } => {}
+            Node::Layers { children, .. } => {
+                for (i, ch) in children.iter().enumerate() {
+                    cv.path.push(i);
+                    ch.draw(cv, r, ink, parent);
+                    cv.path.pop();
+                }
+            }
+            Node::First { children, .. } => {
+                let i = self.choose(r.w as f32, r.h as f32);
+                if let Some(e) = Self::entry(cv, me) {
+                    e.chosen = Some(i);
+                }
+                if let Some(ch) = children.get(i) {
+                    cv.path.push(i);
+                    ch.draw(cv, r, ink, parent);
+                    cv.path.pop();
+                }
+            }
             Node::Stack { dir, children, gap, align, justify, padding, border, invert, .. } => {
                 let outer = ink;
                 let mut ink = ink;
@@ -364,10 +595,14 @@ impl Node {
                     cv.fill(r, outer);
                     ink = if outer == BLACK { WHITE } else { BLACK };
                 }
-                if *border > 0.0 {
-                    cv.border(r, border.round() as i32, outer);
-                }
-                let inner = r.inset((padding + border).round() as i32);
+                let side = |v: f32| v.round() as i32;
+                let (bl, bt, br, bb) = (side(border.left), side(border.top), side(border.right), side(border.bottom));
+                cv.fill(Rect::new(r.x, r.y, r.w, bt), outer);
+                cv.fill(Rect::new(r.x, r.y + r.h - bb, r.w, bb), outer);
+                cv.fill(Rect::new(r.x, r.y, bl, r.h), outer);
+                cv.fill(Rect::new(r.x + r.w - br, r.y, br, r.h), outer);
+                let (l, t, rr, b) = border.inset(*padding);
+                let inner = Rect::new(r.x + l, r.y + t, r.w - l - rr, r.h - t - b);
                 let overflow = draw_children(cv, inner, ink, *dir, children, *gap, *align, *justify);
                 if overflow >= 1.0
                     && let Some(e) = Self::entry(cv, me)
@@ -445,6 +680,23 @@ fn join(dir: Dir, main: f32, cross: f32) -> (f32, f32) {
     }
 }
 
+/// For a row aligned on baselines: how far its children reach above the shared baseline and
+/// below it. Children without text are placed at the top.
+fn baseline_extents(children: &[Node], sizes: &[Size]) -> (f32, f32) {
+    let mut above = 0.0f32;
+    let mut below = 0.0f32;
+    for (ch, s) in children.iter().zip(sizes) {
+        match ch.baseline(s.w, s.h) {
+            Some(b) => {
+                above = above.max(b);
+                below = below.max(s.h - b);
+            }
+            None => below = below.max(s.h - above.min(s.h)),
+        }
+    }
+    (above, below)
+}
+
 /// Each child's size, measured in order with the space the earlier ones left.
 fn measure_children(dir: Dir, children: &[Node], gap: f32, w: f32, h: f32) -> Vec<Size> {
     let (mut avail, cross) = split(dir, Size { w, h });
@@ -503,6 +755,20 @@ fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node],
         Justify::Between => (0.0, 0.0),
     };
 
+    // On a shared baseline: each child's own, and the lowest-reaching one's, from the top.
+    let baseline = (dir == Dir::Row && align == Align::Baseline).then(|| {
+        let own: Vec<Option<f32>> = children
+            .iter()
+            .zip(&mains)
+            .map(|(ch, &main)| {
+                let s = ch.measure(main, cross_total, dir);
+                ch.baseline(main, s.h)
+            })
+            .collect();
+        let line = own.iter().flatten().fold(0.0f32, |a, &b| a.max(b));
+        (own, line)
+    });
+
     for (i, (ch, &main)) in children.iter().zip(&mains).enumerate() {
         let cross = if align == Align::Stretch || matches!(ch, Node::Rule { .. }) {
             cross_total
@@ -514,6 +780,10 @@ fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node],
             Align::Start | Align::Stretch => 0.0,
             Align::Center => (cross_total - cross) / 2.0,
             Align::End => cross_total - cross,
+            Align::Baseline => match &baseline {
+                Some((own, line)) => own[i].map(|b| (line - b).max(0.0)).unwrap_or(0.0),
+                None => 0.0,
+            },
         };
         let (x, y) = join(dir, pos, cross_pos);
         let (w, h) = join(dir, main, cross);
@@ -610,8 +880,8 @@ mod tests {
     #[test]
     fn the_measured_size_is_enough() {
         let t = |s: &str, st: &str| { let mut n = Node::text(s, st); if let Node::Text { wrap, style, .. } = &mut n { *wrap = false; style.size += 0.7; } n };
-        let boxed = |c: Vec<Node>| Node::Stack { dir: Dir::Column, children: c, gap: 6.5, align: Align::Start, justify: Justify::Start, padding: 10.6, border: 2.0, invert: false, common: Common::default() };
-        let row = |c: Vec<Node>| Node::Stack { dir: Dir::Row, children: c, gap: 12.5, align: Align::Start, justify: Justify::Start, padding: 0.0, border: 0.0, invert: false, common: Common::default() };
+        let boxed = |c: Vec<Node>| Node::Stack { dir: Dir::Column, children: c, gap: 6.5, align: Align::Start, justify: Justify::Start, padding: 10.6, border: Edges::uniform(2.0), invert: false, common: Common::default() };
+        let row = |c: Vec<Node>| Node::Stack { dir: Dir::Row, children: c, gap: 12.5, align: Align::Start, justify: Justify::Start, padding: 0.0, border: Edges::ZERO, invert: false, common: Common::default() };
         let trees = vec![
             ("text", t("Interlagos 4.309 km", "body")),
             ("box(text)", boxed(vec![t("Interlagos 4.309 km", "body")])),
@@ -630,6 +900,111 @@ mod tests {
         }
     }
 
+    fn one_line(s: &str, st: &str) -> Node {
+        let mut n = Node::text(s, st);
+        if let Node::Text { wrap, .. } = &mut n {
+            *wrap = false;
+        }
+        n
+    }
+    fn row(children: Vec<Node>, align: Align) -> Node {
+        Node::Stack { dir: Dir::Row, children, gap: 12.0, align, justify: Justify::Start, padding: 0.0, border: Edges::ZERO, invert: false, common: Common::default() }
+    }
+    fn growing(mut n: Node) -> Node {
+        if let Node::Text { common, .. } | Node::Stack { common, .. } = &mut n {
+            common.grow = 1.0;
+        }
+        n
+    }
+
+    #[test]
+    fn a_row_of_growing_children_measures_what_it_draws() {
+        // Growing children get equal shares, so the row needs twice the longer one.
+        let r = row(vec![growing(one_line("Q1", "body")), growing(one_line("Fastest lap of the race", "body"))], Align::Start);
+        let (w, h, _) = r.measured(f32::INFINITY, f32::INFINITY);
+        assert!(r.trial(w, h).0.is_empty(), "{:?} at {w}x{h}", r.trial(w, h).0);
+        // And a limit still limits it.
+        assert!(r.measured(100.0, f32::INFINITY).0 <= 100.0);
+    }
+
+    #[test]
+    fn first_draws_the_first_child_that_fits() {
+        let pick = Node::First {
+            children: vec![one_line("Max Verstappen", "huge"), one_line("Max Verstappen", "title"), one_line("VER", "title")],
+            common: Common::default(),
+        };
+        let chosen = |w: i32| {
+            let mut cv = Canvas::new(w as u32, 120);
+            cv.report = Some(Vec::new());
+            pick.draw(&mut cv, Rect::new(0, 0, w, 120), BLACK, Dir::Column);
+            cv.report.unwrap()[0].chosen
+        };
+        assert_eq!(chosen(800), Some(0));
+        assert_eq!(chosen(250), Some(1));
+        assert_eq!(chosen(60), Some(2));
+        // Measuring picks the same one, and what it measures fits.
+        let (w, h, _) = pick.measured(250.0, f32::INFINITY);
+        assert!(w <= 250.0 && pick.trial(250.0, h).0.is_empty());
+    }
+
+    #[test]
+    fn baseline_alignment_lines_up_mixed_sizes() {
+        let r = row(vec![one_line("72°", "huge"), one_line("Sunny", "body"), one_line("feels 70", "small")], Align::Baseline);
+        let (w, h, _) = r.measured(f32::INFINITY, f32::INFINITY);
+        let mut cv = Canvas::new(w as u32, h as u32);
+        cv.report = Some(Vec::new());
+        r.draw(&mut cv, Rect::new(0, 0, w as i32, h as i32), BLACK, Dir::Column);
+        let report = cv.report.unwrap();
+        let baselines: Vec<f32> = report[1..]
+            .iter()
+            .map(|e| e.y as f32 + TextStyle::named(match e.size.unwrap() as i32 { 96 => "huge", 22 => "body", _ => "small" }).unwrap().ascent())
+            .collect();
+        assert!(baselines.iter().all(|b| (b - baselines[0]).abs() < 1.01), "{baselines:?}");
+        assert!(report[1..].iter().all(|e| e.cut.is_empty()));
+    }
+
+    #[test]
+    fn borders_by_side_dashes_and_patterns() {
+        let mut cv = Canvas::new(100, 40);
+        let b = Node::Stack {
+            dir: Dir::Column,
+            children: vec![],
+            gap: 0.0,
+            align: Align::Stretch,
+            justify: Justify::Start,
+            padding: 0.0,
+            border: Edges { left: 3.0, ..Edges::ZERO },
+            invert: false,
+            common: Common::default(),
+        };
+        b.draw(&mut cv, Rect::new(0, 0, 100, 40), BLACK, Dir::Column);
+        assert!((0..3).all(|x| cv.get(x, 20) == BLACK) && cv.get(3, 20) == WHITE && cv.get(99, 20) == WHITE && cv.get(50, 0) == WHITE);
+
+        let mut cv = Canvas::new(100, 10);
+        let rule = Node::Rule { thickness: 2.0, dash: Some((6.0, 4.0)), common: Common::default() };
+        rule.draw(&mut cv, Rect::new(0, 0, 100, 10), BLACK, Dir::Column);
+        let row: Vec<bool> = (0..100).map(|x| cv.get(x, 5) == BLACK).collect();
+        let dashes = row.windows(2).filter(|w| !w[0] && w[1]).count() + usize::from(row[0]);
+        assert_eq!(dashes, 10);
+
+        let mut cv = Canvas::new(60, 60);
+        let hatched = Node::Spacer { common: Common { fill: Some(Fill::Hatch), ..Common::default() } };
+        hatched.draw(&mut cv, Rect::new(0, 0, 60, 60), BLACK, Dir::Column);
+        let black = (0..60).flat_map(|y| (0..60).map(move |x| (x, y))).filter(|&(x, y)| cv.get(x, y) == BLACK).count();
+        assert_eq!(black, 600, "one pixel in six");
+    }
+
+    #[test]
+    fn images_can_be_thresholded_and_inverted() {
+        let ramp = Arc::new(GrayImage::from_fn(256, 4, |x, _| image::Luma([x as u8])));
+        let img = |threshold, invert| Node::Image { img: ramp.clone(), mask: None, fit: Fit::Contain, dither: true, blur: 0.0, threshold, invert, common: Common::default() };
+        let mut cv = Canvas::new(256, 4).with_grays(4);
+        img(Some(200), false).draw(&mut cv, Rect::new(0, 0, 256, 4), BLACK, Dir::Column);
+        assert!((0..256).all(|x| cv.get(x, 1) == if x >= 200 { WHITE } else { BLACK }));
+        img(Some(128), true).draw(&mut cv, Rect::new(0, 0, 256, 4), BLACK, Dir::Column);
+        assert_eq!((cv.get(10, 1), cv.get(250, 1)), (WHITE, BLACK));
+    }
+
     #[test]
     fn accents_may_rise_above_a_row() {
         // Overpass puts accents on capitals above the top of its line.
@@ -637,7 +1012,7 @@ mod tests {
         if let Node::Text { style, .. } = &mut t {
             style.face = crate::render::font::Face::Overpass;
         }
-        let row = Node::Stack { dir: Dir::Row, children: vec![t], gap: 0.0, align: Align::Start, justify: Justify::Start, padding: 0.0, border: 0.0, invert: false, common: Common::default() };
+        let row = Node::Stack { dir: Dir::Row, children: vec![t], gap: 0.0, align: Align::Start, justify: Justify::Start, padding: 0.0, border: Edges::ZERO, invert: false, common: Common::default() };
         let mut cv = Canvas::new(200, 100);
         row.draw(&mut cv, Rect::new(10, 40, 180, 26), BLACK, Dir::Column);
         assert!(black_in(&cv, Rect::new(0, 0, 200, 40)) > 0, "the accents are drawn above the row");

@@ -157,12 +157,13 @@ async fn display_handler(State(state): State<SharedState>, h: HeaderMap) -> Resp
     }
 
     let png = if action == Some("identify") {
-        display::identify_png(&device)
+        display::identify_png(&device).map(|p| (p, None))
     } else {
-        display::render_png(&state, &device, None).await
+        display::render_screen(&state, &device, None).await
     };
-    let image = png.and_then(|png| display::store_image(&state, &png));
-    let refresh = display::refresh_s(&state, &device);
+    let redraw_at = png.as_ref().ok().and_then(|(_, r)| *r);
+    let image = png.and_then(|(png, _)| display::store_image(&state, &png));
+    let refresh = display::refresh_s(&state, &device, redraw_at);
     match (image, refresh) {
         (Ok(name), Ok(refresh)) => {
             body["image_url"] = json!(format!("{base}/images/{name}.png"));

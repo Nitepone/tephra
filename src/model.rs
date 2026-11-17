@@ -212,12 +212,14 @@ pub struct Instance {
     /// Lua, run before the app; what it assigns becomes the app's `config`.
     pub config: String,
     pub fetched_ms: Option<i64>,
+    /// When the last fetch asked to run next, if it did.
+    pub next_fetch_ms: Option<i64>,
     pub error: Option<String>,
     #[serde(skip)]
     pub data: serde_json::Value,
 }
 
-const INSTANCE_SELECT: &str = "SELECT i.id, i.app, i.name, i.config, d.fetched_ms, d.error, d.data
+const INSTANCE_SELECT: &str = "SELECT i.id, i.app, i.name, i.config, d.fetched_ms, d.error, d.data, d.next_fetch_ms
      FROM instances i LEFT JOIN app_data d ON d.instance_id = i.id";
 
 fn instance_row(r: &Row) -> rusqlite::Result<Instance> {
@@ -228,6 +230,7 @@ fn instance_row(r: &Row) -> rusqlite::Result<Instance> {
         name: r.get(2)?,
         config: r.get(3)?,
         fetched_ms: r.get(4)?,
+        next_fetch_ms: r.get(7)?,
         error: r.get(5)?,
         data: data.and_then(|d| serde_json::from_str(&d).ok()).unwrap_or_default(),
     })
@@ -306,17 +309,18 @@ pub fn delete_app(c: &Connection, id: &str) -> rusqlite::Result<bool> {
     Ok(c.execute("DELETE FROM apps WHERE id = ?", [id])? > 0)
 }
 
-/// Stores a fetch result. A failed fetch keeps the previous data and records the error.
-pub fn store_fetch(c: &Connection, id: i64, result: &Result<serde_json::Value, String>) -> rusqlite::Result<()> {
+/// Stores a fetch result, and when the fetch asked to run next (ms). A failed fetch keeps the
+/// previous data and records the error.
+pub fn store_fetch(c: &Connection, id: i64, result: &Result<(serde_json::Value, Option<i64>), String>) -> rusqlite::Result<()> {
     match result {
-        Ok(data) => c.execute(
-            "INSERT INTO app_data (instance_id, fetched_ms, data, error) VALUES (?1, ?2, ?3, NULL)
-             ON CONFLICT (instance_id) DO UPDATE SET fetched_ms = ?2, data = ?3, error = NULL",
-            params![id, now_ms(), data.to_string()],
+        Ok((data, next)) => c.execute(
+            "INSERT INTO app_data (instance_id, fetched_ms, data, error, next_fetch_ms) VALUES (?1, ?2, ?3, NULL, ?4)
+             ON CONFLICT (instance_id) DO UPDATE SET fetched_ms = ?2, data = ?3, error = NULL, next_fetch_ms = ?4",
+            params![id, now_ms(), data.to_string(), next],
         )?,
         Err(e) => c.execute(
-            "INSERT INTO app_data (instance_id, fetched_ms, data, error) VALUES (?1, ?2, NULL, ?3)
-             ON CONFLICT (instance_id) DO UPDATE SET fetched_ms = ?2, error = ?3",
+            "INSERT INTO app_data (instance_id, fetched_ms, data, error, next_fetch_ms) VALUES (?1, ?2, NULL, ?3, NULL)
+             ON CONFLICT (instance_id) DO UPDATE SET fetched_ms = ?2, error = ?3, next_fetch_ms = NULL",
             params![id, now_ms(), e],
         )?,
     };

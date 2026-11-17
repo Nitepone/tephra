@@ -55,6 +55,30 @@ struct AppCode {
     /// The instance's config (Lua).
     #[serde(default)]
     config: String,
+    /// The time the app sees as now: seconds since 1970, or RFC 3339 text.
+    #[serde(default)]
+    now: Option<Value>,
+    /// What fetch gets as its previous result.
+    #[serde(default)]
+    previous: Value,
+}
+
+/// A time from the request: seconds since 1970, or RFC 3339 text ("2026-11-22T13:00:00Z").
+fn parse_time(v: &Value, what: &str) -> Result<i64, String> {
+    match v {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).ok_or_else(|| format!("{what}: a time")),
+        Value::String(s) => chrono::DateTime::parse_from_rfc3339(s).map(|t| t.timestamp()).map_err(|e| format!("{what}: {s:?} is not RFC 3339 ({e})")),
+        _ => Err(format!("{what}: seconds since 1970, or text like \"2026-11-22T13:00:00Z\"")),
+    }
+}
+
+/// Run options with a fixed clock (if given) and a log to collect.
+fn run_opts(now: Option<i64>) -> (apps::RunOpts, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    (apps::RunOpts { now, log: Some(log.clone()) }, log)
+}
+fn taken(log: &std::sync::Mutex<Vec<String>>) -> Vec<String> {
+    log.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
 }
 
 impl AppCode {
@@ -89,17 +113,25 @@ fn load_failure(meta: &apps::AppMeta) -> Option<Response> {
 struct FetchReport {
     ms: u64,
     limit_ms: u64,
+    /// When fetch asked to run next (`{ refresh = … }`), seconds since 1970.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_at: Option<i64>,
+    /// What it wrote with `log()` or `print()`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    log: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<Failure>,
 }
 
-fn timed_fetch(meta: &apps::AppMeta, config: &str, data_dir: &std::path::Path) -> (Value, FetchReport) {
+fn timed_fetch(meta: &apps::AppMeta, config: &str, previous: &Value, data_dir: &std::path::Path, now: Option<i64>) -> (Value, FetchReport) {
+    let (opts, log) = run_opts(now);
     let t = Instant::now();
-    let result = apps::fetch_detailed(meta, config, data_dir);
+    let result = apps::fetch_with(meta, config, previous, data_dir, &opts);
     let ms = t.elapsed().as_millis() as u64;
+    let log = taken(&log);
     match result {
-        Ok(data) => (data, FetchReport { ms, limit_ms: FETCH_LIMIT_MS, error: None }),
-        Err(f) => (Value::Null, FetchReport { ms, limit_ms: FETCH_LIMIT_MS, error: Some(Failure { stage: "fetch", failure: f }) }),
+        Ok(f) => (f.data, FetchReport { ms, limit_ms: FETCH_LIMIT_MS, refresh_at: f.next, log, error: None }),
+        Err(f) => (Value::Null, FetchReport { ms, limit_ms: FETCH_LIMIT_MS, refresh_at: None, log, error: Some(Failure { stage: "fetch", failure: f }) }),
     }
 }
 
@@ -115,8 +147,12 @@ async fn fetch(State(s): State<SharedState>, Json(app): Json<AppCode>) -> Respon
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "ok": false, "error": { "stage": "load", "message": "the code has no fetch function" } })))
             .into_response();
     }
+    let now = match app.now.as_ref().map(|v| parse_time(v, "now")).transpose() {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": { "stage": "request", "message": e } }))).into_response(),
+    };
     let data_dir = s.cfg.data_dir.clone();
-    let Ok((data, report)) = tokio::task::spawn_blocking(move || timed_fetch(&meta, &app.config, &data_dir)).await else {
+    let Ok((data, report)) = tokio::task::spawn_blocking(move || timed_fetch(&meta, &app.config, &app.previous, &data_dir, now)).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let ok = report.error.is_none();
@@ -149,6 +185,12 @@ struct RenderIn {
     grays: u8,
     #[serde(default)]
     format: Option<String>,
+    /// Render at each of these times (as `now`), every size at each.
+    #[serde(default)]
+    at: Option<Vec<Value>>,
+    /// Report renders slower than this (default: half the limit).
+    #[serde(default)]
+    slow_ms: Option<u64>,
 }
 fn two() -> u8 {
     2
@@ -171,6 +213,15 @@ struct FormatQuery {
 #[derive(Serialize)]
 struct RenderReport {
     size: &'static str,
+    /// The time the app saw as now, when one was given (`now` or `at`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at: Option<i64>,
+    /// When render asked to be drawn again (`{ redraw_at = … }`), seconds since 1970.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redraw_at: Option<i64>,
+    /// What it wrote with `log()` or `print()`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    log: Vec<String>,
     /// The space the app drew into, in panel pixels.
     slot: Rect,
     ms: u64,
@@ -211,21 +262,37 @@ fn preset_for(size: &str) -> &'static screen::Preset {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static str, w: u32, h: u32, grays: u8, title_bar: bool, data_dir: &std::path::Path) -> RenderReport {
+/// What every render of one request shares.
+struct Job<'a> {
+    meta: &'a apps::AppMeta,
+    config: &'a str,
+    data: &'a Value,
+    w: u32,
+    h: u32,
+    grays: u8,
+    title_bar: bool,
+    slow_ms: u64,
+    data_dir: &'a std::path::Path,
+}
+
+fn render_one(job: &Job, size: &'static str, at: Option<i64>) -> RenderReport {
+    let Job { meta, config, data, w, h, grays, title_bar, slow_ms, data_dir } = *job;
     let p = preset_for(size);
     let bars: Vec<bool> = (0..p.slots.len()).map(|i| i == 0 && title_bar).collect();
     let geoms = screen::geometry(p, w, h, &bars);
     let g = geoms[0];
+    let (opts, log) = run_opts(at);
     let t = Instant::now();
-    let result = apps::render_detailed(meta, config, data, Slot { w: g.content.w, h: g.content.h, size: g.size, grays }, data_dir);
+    let result = apps::render_with(meta, config, data, Slot { w: g.content.w, h: g.content.h, size: g.size, grays }, data_dir, &opts);
     let ms = t.elapsed().as_millis() as u64;
+    let log = taken(&log);
+    let redraw_at = result.as_ref().ok().and_then(|r| r.redraw_at);
 
     let mut cv = Canvas::new(w, h).with_grays(grays);
     let frames: Vec<SlotDraw> = geoms.iter().enumerate().map(|(i, g)| SlotDraw { geom: *g, content: None, title: if i == 0 { "App".into() } else { String::new() } }).collect();
     screen::compose_into(&mut cv, p.slots.len() > 1, &frames);
     let mut problems = Vec::new();
-    let (error, layout) = match result {
+    let (error, layout) = match result.map(|r| r.node) {
         Ok(node) => {
             cv.report = Some(Vec::new());
             let clip = cv.push_clip(g.content.inset(-screen::PADDING));
@@ -252,7 +319,7 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
             problems.push(format!("{what}: its children need {px}px more than it has"));
         }
     }
-    if ms * 2 > RENDER_LIMIT_MS {
+    if ms > slow_ms {
         problems.push(format!("render took {ms} ms of its {RENDER_LIMIT_MS} ms limit"));
     }
     let png = cv.to_device_png(OG_IMAGE_LIMIT).unwrap_or_default();
@@ -269,6 +336,9 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
     use base64::Engine;
     RenderReport {
         size,
+        at,
+        redraw_at,
+        log,
         slot: g.content,
         ms,
         limit_ms: RENDER_LIMIT_MS,
@@ -294,7 +364,8 @@ fn sheet(renders: &[RenderReport], w: u32, h: u32) -> Canvas {
         let (cx, cy) = (i as i32 % 2, i as i32 / 2);
         let x = GAP + cx * (w + GAP);
         let y = GAP + cy * (h + LABEL + GAP);
-        let label = format!("{}: slot {}×{}, {} ms{}", r.size, r.slot.w, r.slot.h, r.ms, if r.problems.is_empty() { String::new() } else { format!(", {} problems", r.problems.len()) });
+        let when = r.at.and_then(|t| chrono::DateTime::from_timestamp(t, 0)).map(|t| format!(" at {}", t.with_timezone(&chrono::Local).format("%a %H:%M"))).unwrap_or_default();
+        let label = format!("{}{when}: slot {}×{}, {} ms{}", r.size, r.slot.w, r.slot.h, r.ms, if r.problems.is_empty() { String::new() } else { format!(", {} problems", r.problems.len()) });
         Node::text(label, "label").draw(&mut out, Rect::new(x, y, w, LABEL), BLACK, Dir::Column);
         out.border(Rect::new(x - 1, y + LABEL - 1, w + 2, h + 2), 1, BLACK);
         if let Some(cv) = &r.canvas {
@@ -317,6 +388,21 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
         return bad("grays: 2 or 4".into());
     }
     let png_out = q.format.or(req.format.clone()).as_deref() == Some("png");
+    let now = match req.app.now.as_ref().map(|v| parse_time(v, "now")).transpose() {
+        Ok(n) => n,
+        Err(e) => return bad(e),
+    };
+    let times: Vec<Option<i64>> = match &req.at {
+        Some(list) if !list.is_empty() => match list.iter().map(|v| parse_time(v, "at").map(Some)).collect() {
+            Ok(t) => t,
+            Err(e) => return bad(e),
+        },
+        Some(_) => return bad("at: a list of times".into()),
+        None => vec![now],
+    };
+    if times.len() * sizes.len() > 24 {
+        return bad("at most 24 renders (times × sizes) in one call".into());
+    }
     let meta = req.app.meta();
     if let Some(r) = load_failure(&meta) {
         return r;
@@ -326,12 +412,23 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
         let (data, fetch) = match (&req.data, meta.has_fetch) {
             (Some(d), _) => (d.clone(), None),
             (None, true) => {
-                let (d, r) = timed_fetch(&meta, &req.app.config, &data_dir);
+                let (d, r) = timed_fetch(&meta, &req.app.config, &req.app.previous, &data_dir, now.or(times[0]));
                 (d, Some(r))
             }
             (None, false) => (Value::Null, None),
         };
-        let renders: Vec<RenderReport> = sizes.iter().map(|size| render_one(&meta, &req.app.config, &data, size, req.w, req.h, req.grays, req.title_bar, &data_dir)).collect();
+        let job = Job {
+            meta: &meta,
+            config: &req.app.config,
+            data: &data,
+            w: req.w,
+            h: req.h,
+            grays: req.grays,
+            title_bar: req.title_bar,
+            slow_ms: req.slow_ms.unwrap_or(RENDER_LIMIT_MS / 2),
+            data_dir: &data_dir,
+        };
+        let renders: Vec<RenderReport> = times.iter().flat_map(|&at| sizes.iter().map(move |size| (at, *size))).map(|(at, size)| render_one(&job, size, at)).collect();
         (fetch, renders, req.w, req.h)
     })
     .await;

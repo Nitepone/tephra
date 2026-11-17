@@ -37,7 +37,10 @@
 -- @table Setting
 -- @tfield string key The name a config assigns, such as `location`.
 -- @tfield[opt] string label A short description, written as a comment in new configs.
--- @tfield[opt="string"] string type `"string"`, `"text"`, `"number"`, `"bool"` or `"choice"`.
+-- @tfield[opt="string"] string type `"string"`, `"text"`, `"number"`, `"bool"` or `"choice"`;
+-- or one that is checked before the app runs, so a mistake is the config's, by name:
+-- `"duration"` (`"6h"`, `"1h30m"`; seconds with @{time.duration}), `"zone"` (`"Europe/London"`,
+-- `"UTC"`, `"local"`) or `"time"` (of day: `"16:04"`).
 -- Documentation only.
 -- @tfield[opt] {string,...} options For a choice: the values allowed.
 -- @tfield[opt] any default The value when a config leaves this out.
@@ -59,14 +62,28 @@
 -- take up to 60 seconds and is the only place `http` is available. What it returns is stored
 -- and handed to `render`. If it raises an error, the previous data is kept and the error is
 -- shown in the UI.
+--
+-- It may say when it runs next with a second result, instead of the app's `refresh`:
+-- `{ refresh = "5m" }` (a duration or seconds, at least a minute) or `{ refresh_at = t }`. A
+-- device showing the app comes back just after that fetch, within its own refresh bounds.
 -- @tparam table config The instance's config.
+-- @param previous What the last fetch returned (nil the first time): to keep what doesn't
+-- change, or what failed to load this time.
 -- @return Plain data: tables, strings, numbers and booleans. Store binary data with `blob` first.
+-- @return[opt] `{ refresh = … }` or `{ refresh_at = … }`.
 -- @usage fetch = function(config)
 --   local r = http.get(config.url)
 --   if not r.ok then error("HTTP " .. r.status) end
 --   return { image = blob(r.body) }
 -- end
-function fetch(config) end
+-- @usage -- Finished sessions never change: keep them.
+-- fetch = function(config, previous)
+--   local done = previous and previous.done or {}
+--   ...
+--   local live = session_running(now)
+--   return { done = done, live = live }, { refresh = live and "5m" or "6h" }
+-- end
+function fetch(config, previous) end
 
 --- Draws the app.
 --
@@ -76,10 +93,17 @@ function fetch(config) end
 -- @tparam Slot slot The space to draw into.
 -- @tparam table config The instance's config.
 -- @treturn ui.Node What to draw: build it with the @{ui} functions.
+-- @return[opt] `{ redraw_at = t }`: when the app should be drawn again, such as the moment a
+-- countdown ends or results may be shown (or `{ redraw = "10m" }`, from now). The device is
+-- told to come back just after, within its own refresh bounds.
 -- @usage render = function(data, slot, config)
 --   return ui.column {
 --     ui.text { config.title, style = "title" },
 --     slot.size ~= "small" and ui.text { data.summary, wrap = true } or nil,
 --   }
+-- end
+-- @usage -- Spoilers lift at 16:04:
+-- if time.now() < data.reveal then
+--   return ui.text "Results at 16:04", { redraw_at = data.reveal }
 -- end
 function render(data, slot, config) end

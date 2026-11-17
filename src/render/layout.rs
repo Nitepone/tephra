@@ -115,9 +115,12 @@ pub struct LayoutEntry {
     pub lines: Option<usize>,
     /// What didn't fit: `too_wide` (a line ended in "…"), `max_lines` (more lines than allowed),
     /// `too_tall` (lines below the bottom were left out), `word_split` (a word was broken),
-    /// `no_space` (the node got no room at all).
+    /// `no_space` (the node got no room at all), `missing_glyph` (characters no font has, listed in
+    /// `missing`; they show as empty boxes).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cut: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing: Option<String>,
     /// Containers: how many pixels the children needed beyond the space there was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow_px: Option<i32>,
@@ -201,7 +204,8 @@ impl Node {
             },
             Node::Spacer { .. } => Size { w: 0.0, h: 0.0 },
             Node::Stack { dir, children, gap, padding, border, .. } => {
-                let inset = 2.0 * (padding + border);
+                // Rounded as `draw` rounds it.
+                let inset = 2.0 * (padding + border).round();
                 let (iw, ih) = ((max_w - inset).max(0.0), (max_h - inset).max(0.0));
                 let sizes = measure_children(*dir, children, *gap, iw, ih);
                 let n = children.len().max(1) as f32;
@@ -213,9 +217,10 @@ impl Node {
                 Size { w: w + inset, h: h + inset }
             }
         };
+        // Whole pixels, rounded up: a node given what it measured never comes up short.
         Size {
-            w: c.width.unwrap_or(s.w).min(max_w),
-            h: c.height.unwrap_or(s.h).min(max_h),
+            w: c.width.unwrap_or(s.w).ceil().min(max_w),
+            h: c.height.unwrap_or(s.h).ceil().min(max_h),
         }
     }
 
@@ -256,6 +261,7 @@ impl Node {
             size: None,
             lines: None,
             cut: Vec::new(),
+            missing: None,
             overflow_px: None,
             image: None,
         };
@@ -280,7 +286,18 @@ impl Node {
         if r.w <= 0 || r.h <= 0 {
             return;
         }
-        let clip = cv.push_clip(r);
+        // What a node may draw on. Text may reach a little above and below its box, as accents
+        // and descenders do in fonts whose lines leave them no room; never sideways. Containers
+        // don't clip: their children are always placed inside them, and an accent at the top of
+        // a row must be able to rise above it. (The slot itself is clipped by `screen::compose`.)
+        let clip = match self {
+            Node::Text { style, .. } => {
+                let m = (style.size * 0.3).ceil() as i32;
+                cv.push_clip(Rect::new(r.x, r.y - m, r.w, r.h + 2 * m))
+            }
+            Node::Stack { .. } => cv.push_clip(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 2, i32::MAX / 2)),
+            _ => cv.push_clip(r),
+        };
         match self {
             Node::Text { text, style, wrap, align, max_lines, shrink_to, .. } => {
                 let style = &match shrink_to {
@@ -299,6 +316,11 @@ impl Node {
                         if cut {
                             e.cut.push(why);
                         }
+                    }
+                    let missing = style.missing(text);
+                    if !missing.is_empty() {
+                        e.cut.push("missing_glyph");
+                        e.missing = Some(missing);
                     }
                 }
                 for (i, line) in lines.iter().take(fit).enumerate() {
@@ -495,7 +517,10 @@ fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node],
         };
         let (x, y) = join(dir, pos, cross_pos);
         let (w, h) = join(dir, main, cross);
-        let cr = Rect::new(r.x + x.round() as i32, r.y + y.round() as i32, w.round() as i32, h.round() as i32);
+        // Round the edges, not the position and size apart, so no pixels are lost along the way.
+        let (x0, y0) = ((r.x as f32 + x).round() as i32, (r.y as f32 + y).round() as i32);
+        let (x1, y1) = ((r.x as f32 + x + w).round() as i32, (r.y as f32 + y + h).round() as i32);
+        let cr = Rect::new(x0, y0, x1 - x0, y1 - y0);
         cv.path.push(i);
         ch.draw(cv, cr, ink, dir);
         cv.path.pop();
@@ -579,6 +604,43 @@ mod tests {
         assert!(st.width("Abu Dhabi Grand Prix") <= 300.0);
         let bigger = TextStyle { size: size + 1.0, ..st };
         assert!(bigger.width("Abu Dhabi Grand Prix") > 300.0, "it is the largest that fits");
+    }
+
+    /// A node drawn at the size it measured has nothing cut, fractional gaps and sizes or not.
+    #[test]
+    fn the_measured_size_is_enough() {
+        let t = |s: &str, st: &str| { let mut n = Node::text(s, st); if let Node::Text { wrap, style, .. } = &mut n { *wrap = false; style.size += 0.7; } n };
+        let boxed = |c: Vec<Node>| Node::Stack { dir: Dir::Column, children: c, gap: 6.5, align: Align::Start, justify: Justify::Start, padding: 10.6, border: 2.0, invert: false, common: Common::default() };
+        let row = |c: Vec<Node>| Node::Stack { dir: Dir::Row, children: c, gap: 12.5, align: Align::Start, justify: Justify::Start, padding: 0.0, border: 0.0, invert: false, common: Common::default() };
+        let trees = vec![
+            ("text", t("Interlagos 4.309 km", "body")),
+            ("box(text)", boxed(vec![t("Interlagos 4.309 km", "body")])),
+            ("box(box(text))", boxed(vec![boxed(vec![t("Autódromo José Carlos Pace", "title")])])),
+            ("box(row(t,t))", boxed(vec![row(vec![t("FP1", "label"), t("Fri 7 Nov 11:30", "body")])])),
+            ("box(box(row(t,t)),t)", boxed(vec![boxed(vec![row(vec![t("Quali", "label"), t("Sat 8 Nov 15:00", "body")])]), t("São Paulo", "large")])),
+        ];
+        for (name, n) in trees {
+            let (w, h, _) = n.measured(f32::INFINITY, f32::INFINITY);
+            let (w, h) = (w.ceil() as i32, h.ceil() as i32);
+            let mut cv = Canvas::new(1000, 600);
+            cv.report = Some(Vec::new());
+            n.draw(&mut cv, Rect::new(0, 0, w, h), BLACK, Dir::Column);
+            let bad: Vec<_> = cv.report.unwrap().into_iter().filter(|e| !e.cut.is_empty() || e.overflow_px.is_some()).map(|e| format!("{} {:?} {:?} w{}", e.path, e.cut, e.overflow_px, e.w)).collect();
+            assert!(bad.is_empty(), "{name}: measured {w}x{h}: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn accents_may_rise_above_a_row() {
+        // Overpass puts accents on capitals above the top of its line.
+        let mut t = Node::text("ÃÕÑ", "title");
+        if let Node::Text { style, .. } = &mut t {
+            style.face = crate::render::font::Face::Overpass;
+        }
+        let row = Node::Stack { dir: Dir::Row, children: vec![t], gap: 0.0, align: Align::Start, justify: Justify::Start, padding: 0.0, border: 0.0, invert: false, common: Common::default() };
+        let mut cv = Canvas::new(200, 100);
+        row.draw(&mut cv, Rect::new(10, 40, 180, 26), BLACK, Dir::Column);
+        assert!(black_in(&cv, Rect::new(0, 0, 200, 40)) > 0, "the accents are drawn above the row");
     }
 
     #[test]

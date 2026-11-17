@@ -218,7 +218,9 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
     let (error, layout) = match result {
         Ok(node) => {
             cv.report = Some(Vec::new());
+            let clip = cv.push_clip(g.content.inset(-screen::PADDING));
             node.draw(&mut cv, g.content, BLACK, Dir::Column);
+            cv.pop_clip(clip);
             (None, cv.report.take().unwrap_or_default())
         }
         Err(f) => {
@@ -233,7 +235,8 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
             None => format!("{} {}", e.path, e.kind),
         };
         if !e.cut.is_empty() {
-            problems.push(format!("{what}: {}", e.cut.join(", ")));
+            let missing = e.missing.as_ref().map(|m| format!(" (no font has {m}; drawn as empty boxes)")).unwrap_or_default();
+            problems.push(format!("{what}: {}{missing}", e.cut.join(", ")));
         }
         if let Some(px) = e.overflow_px {
             problems.push(format!("{what}: its children need {px}px more than it has"));

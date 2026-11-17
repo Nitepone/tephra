@@ -42,7 +42,7 @@ pub fn preset(id: &str) -> &'static Preset {
 
 const GAP: i32 = 8; // between slots and around them, on multi-slot screens
 const BORDER: i32 = 2;
-const PADDING: i32 = 14;
+pub const PADDING: i32 = 14;
 const TITLE_H: i32 = 30;
 
 /// Where one slot falls on the panel.
@@ -109,11 +109,14 @@ pub fn compose_into(cv: &mut Canvas, multi: bool, slots: &[SlotDraw]) {
             let title = Node::text(s.title.clone(), "label");
             title.draw(cv, Rect::new(t.x + PADDING, t.y + 5, t.w - 2 * PADDING, t.h - 5), WHITE, Dir::Column);
         }
+        // The app may draw into its padding (an accent above its top line) but not past it.
+        let clip = cv.push_clip(s.geom.content.inset(-PADDING));
         match &s.content {
             Some(Ok(node)) => node.draw(cv, s.geom.content, BLACK, Dir::Column),
             Some(Err(e)) => error_node(&s.title, e).draw(cv, s.geom.content, BLACK, Dir::Column),
             None => {}
         }
+        cv.pop_clip(clip);
     }
 }
 

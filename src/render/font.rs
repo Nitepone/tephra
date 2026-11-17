@@ -1,5 +1,7 @@
-//! Text: the bundled typefaces (all OFL, see assets/fonts/OFL.txt), measuring, wrapping and
-//! drawing. A character a face doesn't have is drawn from Noto Sans instead.
+//! Text: the bundled typefaces (assets/fonts, with their licenses), measuring, wrapping and
+//! drawing. A character a face doesn't have is drawn from Noto Sans, and failing that from
+//! DejaVu Sans, which has most symbols (● ✓ ★ → ▶ …). Text is put in Unicode's composed form
+//! (NFC) first, so a letter and a separate accent become the one accented letter fonts have.
 
 use super::Canvas;
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont, point};
@@ -42,6 +44,14 @@ const FILES: &[(Face, bool, bool, &[u8])] = &[
     (Face::Overpass, true, false, include_bytes!("../../assets/fonts/overpass-bold.otf")),
 ];
 
+/// The last resort, for symbols: DejaVu Sans, regular and bold.
+const SYMBOLS: [&[u8]; 2] = [include_bytes!("../../assets/fonts/DejaVuSans.ttf"), include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf")];
+
+fn symbols(bold: bool) -> &'static FontRef<'static> {
+    static F: OnceLock<[FontRef<'static>; 2]> = OnceLock::new();
+    &F.get_or_init(|| SYMBOLS.map(|d| FontRef::try_from_slice(d).expect("bundled font")))[bold as usize]
+}
+
 fn loaded() -> &'static Vec<(Face, bool, bool, FontRef<'static>)> {
     static F: OnceLock<Vec<(Face, bool, bool, FontRef<'static>)>> = OnceLock::new();
     F.get_or_init(|| FILES.iter().map(|(f, b, i, data)| (*f, *b, *i, FontRef::try_from_slice(data).expect("bundled font"))).collect())
@@ -73,8 +83,33 @@ pub struct TextStyle {
 /// One glyph placed on a line.
 struct Placed {
     font: &'static FontRef<'static>,
+    scale: PxScale,
     id: GlyphId,
     x: f32,
+}
+
+/// The em size, in pixels, of `font` at `scale` (ab_glyph scales by ascent minus descent).
+fn em_px(font: &FontRef, scale: PxScale) -> f32 {
+    scale.y * font.units_per_em().unwrap_or(1000.0) / font.height_unscaled()
+}
+
+/// The scale at which `font`'s letters are as big as another font's at `em` pixels.
+fn scale_for_em(font: &FontRef, em: f32) -> PxScale {
+    PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0))
+}
+
+/// Whether `font` has a glyph for `c`.
+fn has(font: &FontRef, c: char) -> bool {
+    font.glyph_id(c).0 != 0
+}
+
+/// `text` in composed form (NFC), borrowed when it already is.
+fn composed(text: &str) -> std::borrow::Cow<'_, str> {
+    use unicode_normalization::{UnicodeNormalization, is_nfc_quick, IsNormalized};
+    match is_nfc_quick(text.chars()) {
+        IsNormalized::Yes => std::borrow::Cow::Borrowed(text),
+        _ => std::borrow::Cow::Owned(text.nfc().collect()),
+    }
 }
 
 impl TextStyle {
@@ -104,36 +139,58 @@ impl TextStyle {
         self.primary().as_scaled(self.scale()).ascent()
     }
 
+    /// A line's height: the size, whatever extra spacing a font asks for.
     pub fn line_height(&self) -> f32 {
         let s = self.primary().as_scaled(self.scale());
-        (s.ascent() - s.descent() + s.line_gap()).ceil()
+        (s.ascent() - s.descent()).ceil()
     }
 
-    /// Places each character, from the face or (if it lacks the character) Noto Sans.
-    fn place(&self, text: &str) -> (Vec<Placed>, f32) {
+    /// The fonts tried for each character, in order, with the scale that matches their letter
+    /// size to the face's.
+    fn chain(&self) -> [(&'static FontRef<'static>, PxScale); 3] {
         let primary = self.primary();
-        let fallback = font(Face::Sans, self.bold, false);
+        let em = em_px(primary, self.scale());
+        let sans = font(Face::Sans, self.bold, false);
+        let sym = symbols(self.bold);
+        [(primary, self.scale()), (sans, scale_for_em(sans, em)), (sym, scale_for_em(sym, em))]
+    }
+
+    /// Places each character, from the first font in `chain` that has it.
+    fn place(&self, text: &str) -> (Vec<Placed>, f32) {
+        let text = composed(text);
+        let chain = self.chain();
         let mut out = Vec::with_capacity(text.len());
         let mut pen = 0.0;
         let mut prev: Option<(&FontRef, GlyphId)> = None;
         for c in text.chars() {
-            let mut f = primary;
-            let mut id = f.glyph_id(c);
-            if id.0 == 0 && !c.is_whitespace() {
-                f = fallback;
-                id = f.glyph_id(c);
-            }
-            let s = f.as_scaled(self.scale());
+            let (f, scale, id) = chain
+                .iter()
+                .find(|(f, _)| has(f, c))
+                .map(|(f, s)| (*f, *s, f.glyph_id(c)))
+                .unwrap_or((chain[0].0, chain[0].1, GlyphId(0)));
+            let s = f.as_scaled(scale);
             if let Some((pf, pid)) = prev
                 && std::ptr::eq(pf, f)
             {
                 pen += s.kern(pid, id);
             }
-            out.push(Placed { font: f, id, x: pen });
+            out.push(Placed { font: f, scale, id, x: pen });
             pen += s.h_advance(id);
             prev = Some((f, id));
         }
         (out, pen)
+    }
+
+    /// The characters of `text` that no bundled font has, each once.
+    pub fn missing(&self, text: &str) -> String {
+        let chain = self.chain();
+        let mut out = String::new();
+        for c in composed(text).chars() {
+            if !c.is_whitespace() && !c.is_control() && chain.iter().all(|(f, _)| !has(f, c)) && !out.contains(c) {
+                out.push(c);
+            }
+        }
+        out
     }
 
     pub fn width(&self, text: &str) -> f32 {
@@ -201,7 +258,7 @@ impl TextStyle {
             .place(text)
             .0
             .into_iter()
-            .filter_map(|p| p.font.outline_glyph(p.id.with_scale_and_position(self.scale(), point(x + p.x, baseline))))
+            .filter_map(|p| p.font.outline_glyph(p.id.with_scale_and_position(p.scale, point(x + p.x, baseline))))
             .collect();
         if !self.smooth {
             for o in &outlines {
@@ -290,6 +347,23 @@ mod tests {
         st.face = Face::Serif;
         st.italic = true;
         assert!(st.width("Illuminati") > 0.0);
+    }
+
+    #[test]
+    fn symbols_come_from_dejavu_and_line_height_is_the_size() {
+        for face in [Face::Sans, Face::Serif, Face::Mono, Face::Overpass] {
+            let st = TextStyle { face, ..TextStyle::named("title").unwrap() };
+            assert_eq!(st.missing("● ○ ✓ ▶ ★ ━ → São"), "", "{face:?}");
+            assert_eq!(st.line_height(), 26.0, "{face:?}");
+        }
+        let st = TextStyle::named("body").unwrap();
+        assert_eq!(st.missing("ok 日本 \u{E000}"), "日本\u{E000}");
+    }
+
+    #[test]
+    fn decomposed_accents_are_composed() {
+        let st = TextStyle { face: Face::Overpass, ..TextStyle::named("large").unwrap() };
+        assert_eq!(st.width("SA\u{303}O"), st.width("S\u{C3}O"));
     }
 
     #[test]

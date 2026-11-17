@@ -104,7 +104,7 @@ ui.<span class="function-name">column</span> {
 	</tr>
 	<tr>
 	<td class="name" nowrap><a href="#measure">measure(node[, max_w[, max_h]])</a></td>
-	<td class="summary">The size a node would take, before drawing it.</td>
+	<td class="summary">The size a node would take, and whether it fits, before drawing it.</td>
 	</tr>
 	<tr>
 	<td class="name" nowrap><a href="#rule">rule([t])</a></td>
@@ -267,12 +267,18 @@ ui.<span class="function-name">column</span> {
     Text. </p>
 
 <p> Styles: <code>small</code> 16 px, <code>body</code> 22 px (the default), <code>label</code> 16 px bold, <code>title</code> 26 px bold,
- <code>large</code> 44 px bold, <code>huge</code> 96 px bold. A size is the height of a line, in pixels.</p>
+ <code>large</code> 44 px bold, <code>huge</code> 96 px bold. A size is the height of a line, in pixels, in every
+ font. Accents on capitals and low descenders may reach a little above or below the line.</p>
 
 <p> Fonts: <code>sans</code> (Noto Sans, the default), <code>serif</code> (Noto Serif), <code>mono</code> (Noto Sans Mono, every
  character the same width, for columns of numbers and times) and <code>overpass</code> (Overpass). Each
- has regular and bold; only <code>serif</code> has italic, and the others ignore it. A character a font
- lacks is drawn from Noto Sans.</p>
+ has regular and bold; only <code>serif</code> has italic, and the others ignore it.</p>
+
+<p> A character a font lacks is drawn from Noto Sans, and failing that from DejaVu Sans, which has
+ most symbols: ● ○ ✓ ✗ ▶ ★ ━ → ← ↑ ↓ ☀ ☁ ☂ and many more. A character no font has (most
+ emoji, Chinese and Japanese) shows as an empty box; the developer API's layout report and
+ <a href="../modules/ui.html#measure">measure</a> name such characters. Text is put in Unicode's composed form first, so a letter
+ followed by a separate accent is drawn as the accented letter.</p>
 
 <p> Text is drawn crisp: each pixel is black or white by how much of it the letter covers. With
  <code>smooth</code>, the edges are dithered instead, which softens the curves of large text (about 60 px
@@ -414,11 +420,12 @@ ui.<span class="function-name">column</span> {
     <strong>measure(node[, max_w[, max_h]])</strong>
     </dt>
     <dd>
-    The size a node would take, before drawing it. </p>
+    The size a node would take, and whether it fits, before drawing it. </p>
 
-<p> Use it to decide what fits instead of guessing at letter widths. The size is what the node
- asks for within <code>max_w</code> × <code>max_h</code>, the same way a column or row measures it. Text with
- <code>fit = &quot;shrink&quot;</code> is measured at its full size.
+<p> Use it to decide what fits instead of guessing at letter widths. <code>fits</code> and <code>cut</code> come from
+ laying the node out in the space given exactly as a render would, so they agree with what is
+ drawn: a node given <code>w</code> × <code>h</code> (or, with no limits, <code>needed_w</code> × <code>needed_h</code>) is drawn with
+ nothing cut. Text with <code>fit = &quot;shrink&quot;</code> is measured at its full size.
 
 
     <h3>Parameters:</h3>
@@ -444,7 +451,21 @@ ui.<span class="function-name">column</span> {
     <ol>
 
            <span class="types"><span class="type">table</span></span>
-        <code>{ w = ..., h = ... }</code> in pixels; for text also <code>lines</code> and <code>line_height</code>.
+
+<p> In whole pixels:</p>
+
+<ul>
+    <li><code>w</code>, <code>h</code>: the size it takes within the limits (what a column or row would give it);</li>
+    <li><code>needed_w</code>: the width it would take with no limit (for wrapping text, one long line);</li>
+    <li><code>needed_h</code>: the height it needs at <code>max_w</code>;</li>
+    <li><code>fits</code>: whether it fits the limits with nothing cut;</li>
+    <li><code>cut</code>: why not, as in the developer API's layout report (<code>too_wide</code>, <code>max_lines</code>,
+    <code>too_tall</code>, <code>word_split</code>, <code>no_space</code>, <code>overflow</code>; and <code>missing_glyph</code>, which doesn't stop
+    it fitting);</li>
+    <li><code>missing</code>: characters no font has, if any;</li>
+    <li>for text, <code>lines</code> and <code>line_height</code>.</li>
+</ul>
+
     </ol>
 
 
@@ -454,6 +475,8 @@ ui.<span class="function-name">column</span> {
         <li><pre class="example"><span class="keyword">local</span> title = ui.<span class="function-name">text</span> { data.name, style = <span class="string">"large"</span>, wrap = <span class="keyword">true</span> }
 <span class="keyword">local</span> m = ui.<span class="function-name">measure</span>(title, slot.w)
 <span class="keyword">local</span> room_left = slot.h - m.h</pre></li>
+        <li><pre class="example"><span class="comment">-- Show the table only if it fits beside the map:
+</span> <span class="keyword">if</span> ui.<span class="function-name">measure</span>(timetable, slot.w - <span class="number">200</span>, room_left).fits <span class="keyword">then</span> ... <span class="keyword">end</span></pre></li>
         <li><pre class="example"><span class="comment">-- The widest label, to size a column:
 </span><span class="keyword">local</span> w = <span class="number">0</span>
 <span class="keyword">for</span> _, s <span class="keyword">in</span> <span class="global">ipairs</span>(sessions) <span class="keyword">do</span> w = <span class="global">math</span>.<span class="function-name">max</span>(w, ui.<span class="function-name">measure</span>(s.label).w) <span class="keyword">end</span></pre></li>
@@ -570,7 +593,7 @@ ui.<span class="function-name">column</span> {
 </div> <!-- id="main" -->
 <div id="about">
 <i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
-<i style="float:right;">Last updated 2026-11-16 17:29:59 </i>
+<i style="float:right;">Last updated 2026-11-16 17:57:37 </i>
 </div> <!-- id="about" -->
 </div> <!-- id="container" -->
 </body>

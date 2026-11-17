@@ -8,7 +8,7 @@
 //! them with `spawn_blocking`.
 
 use crate::model::StoredApp;
-use crate::render::decode_gray;
+use crate::render::{BLACK, Canvas, Rect, decode_gray};
 use crate::render::font::{Face, TextStyle};
 use crate::render::layout::{Align, Common, Dir, Fit, Justify, Node, TextAlign};
 use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, Value, VmState};
@@ -633,13 +633,38 @@ fn install_measure(lua: &Lua, app_dir: Option<PathBuf>, data_dir: PathBuf) -> ml
             v => v,
         };
         let n = node_from_lua(&node, &ctx).map_err(mlua::Error::runtime)?;
-        let (w, h, lines) = n.measured(max_w.unwrap_or(f32::INFINITY), max_h.unwrap_or(f32::INFINITY));
+        let (lw, lh) = (max_w.unwrap_or(f32::INFINITY), max_h.unwrap_or(f32::INFINITY));
+        let (w, h, lines) = n.measured(lw, lh);
+        // What it needs with no limit: its natural width, and its height at the width given.
+        let needed_w = n.measured(f32::INFINITY, f32::INFINITY).0;
+        let needed_h = n.measured(lw, f32::INFINITY).1;
+        // Whether it fits: lay it out in the space given, exactly as a render would.
+        let (tw, th) = (lw.min(needed_w).min(4000.0), lh.min(needed_h).min(4000.0));
+        let mut cv = Canvas::new(tw.max(1.0) as u32, th.max(1.0) as u32);
+        cv.report = Some(Vec::new());
+        n.draw(&mut cv, Rect::new(0, 0, tw as i32, th as i32), BLACK, Dir::Column);
+        let report = cv.report.take().unwrap_or_default();
+        let mut cut: Vec<&str> = report.iter().flat_map(|e| e.cut.iter().copied()).collect();
+        if report.iter().any(|e| e.overflow_px.is_some()) {
+            cut.push("overflow");
+        }
+        cut.sort();
+        cut.dedup();
+        let missing: String = report.iter().filter_map(|e| e.missing.as_deref()).collect();
+
         let out = lua.create_table()?;
-        out.set("w", w.ceil())?;
-        out.set("h", h.ceil())?;
+        out.set("w", w.ceil() as i64)?;
+        out.set("h", h.ceil() as i64)?;
+        out.set("needed_w", needed_w.ceil() as i64)?;
+        out.set("needed_h", needed_h.ceil() as i64)?;
+        out.set("fits", cut.iter().all(|c| *c == "missing_glyph"))?;
+        out.set("cut", lua.create_sequence_from(cut)?)?;
+        if !missing.is_empty() {
+            out.set("missing", missing)?;
+        }
         if let Node::Text { style, .. } = &n {
             out.set("lines", lines.unwrap_or(1))?;
-            out.set("line_height", style.line_height())?;
+            out.set("line_height", style.line_height() as i64)?;
         }
         Ok(out)
     })?;
@@ -943,6 +968,22 @@ mod tests {
         end }"#);
         let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
         assert_eq!(first_text(&node), "1 2 true true true 1");
+    }
+
+    #[test]
+    fn measure_says_what_does_not_fit() {
+        let meta = stored(r#"return { render = function()
+            local name = ui.text { "Autódromo José Carlos Pace", style = "title" }
+            local m = ui.measure(name, 150)
+            local ok = ui.measure(name, 1000)
+            local wrapped = ui.measure(ui.text { "Autódromo José Carlos Pace", wrap = true, max_lines = 1 }, 150)
+            local star = ui.measure(ui.text { "★ \u{E000}" })
+            return ui.text { table.concat({ m.w, tostring(m.needed_w > 150), tostring(m.fits), table.concat(m.cut, "+"),
+              tostring(ok.fits), #ok.cut, tostring(wrapped.fits), table.concat(wrapped.cut, "+"),
+              tostring(star.fits), star.missing }, " ") }
+        end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "149 true false too_wide true 0 false max_lines true \u{E000}");
     }
 
     #[test]

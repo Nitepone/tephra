@@ -229,6 +229,11 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     lua.globals().set("time", time)?;
+
+    // string.upper and lower only change ASCII letters; these change every letter.
+    let utf8: Table = lua.globals().get("utf8")?;
+    utf8.set("upper", lua.create_function(|_, s: String| Ok(s.to_uppercase()))?)?;
+    utf8.set("lower", lua.create_function(|_, s: String| Ok(s.to_lowercase()))?)?;
     lua.load(HELPERS).set_name("=helpers").exec()
 }
 
@@ -308,6 +313,11 @@ mod tests {
         assert_eq!(eval(r#"return time.relative(1000 + 3 * 86400, 1000) .. ", " .. time.relative(1000 - 7200, 1000) .. ", " .. time.relative(1010, 1000)"#), "in 3 days, 2 h ago, now");
         assert!(eval(r#"return time.format(0, "%H", "Mars/Olympus")"#).contains("unknown time zone"));
         assert!(eval(r#"return time.format(0, "%Q")"#).contains("bad time format"));
+    }
+
+    #[test]
+    fn utf8_case() {
+        assert_eq!(eval(r#"return utf8.upper("São Paulo") .. "|" .. ("São Paulo"):upper() .. "|" .. utf8.lower("ÉCOLE")"#), "SÃO PAULO|SãO PAULO|école");
     }
 
     #[test]

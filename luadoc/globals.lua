@@ -9,6 +9,9 @@
 -- tephra adds a few string and table helpers that Lua lacks, listed below. The string ones
 -- work as methods too: `s:split(",")`.
 --
+-- Lua's `string.upper` and `string.lower` only change the letters A to Z: `("São"):upper()` is
+-- "SãO". Use `utf8.upper` and `utf8.lower` for text with accents.
+--
 -- A call may use up to 64 MB of memory.
 -- @module globals
 
@@ -102,3 +105,13 @@ function table.keys(t) end
 -- @int[opt=#t] j
 -- @treturn table
 function table.slice(t, i, j) end
+
+--- Uppercases every letter, accented or not: `utf8.upper("São Paulo")` is "SÃO PAULO".
+-- @string s
+-- @treturn string
+function utf8.upper(s) end
+
+--- Lowercases every letter, accented or not.
+-- @string s
+-- @treturn string
+function utf8.lower(s) end

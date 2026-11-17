@@ -105,6 +105,8 @@ The reasons in `cut`:
 - `too_tall`: lines below the bottom of the node were left out.
 - `word_split`: a word wider than the line was broken.
 - `no_space`: the node got no room at all.
+- `missing_glyph`: characters no bundled font has, listed in the node's `missing`; they show
+  as empty boxes.
 
 ### Errors
 

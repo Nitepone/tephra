@@ -55,12 +55,18 @@ function ui.box(t) end
 --- Text.
 --
 -- Styles: `small` 16 px, `body` 22 px (the default), `label` 16 px bold, `title` 26 px bold,
--- `large` 44 px bold, `huge` 96 px bold. A size is the height of a line, in pixels.
+-- `large` 44 px bold, `huge` 96 px bold. A size is the height of a line, in pixels, in every
+-- font. Accents on capitals and low descenders may reach a little above or below the line.
 --
 -- Fonts: `sans` (Noto Sans, the default), `serif` (Noto Serif), `mono` (Noto Sans Mono, every
 -- character the same width, for columns of numbers and times) and `overpass` (Overpass). Each
--- has regular and bold; only `serif` has italic, and the others ignore it. A character a font
--- lacks is drawn from Noto Sans.
+-- has regular and bold; only `serif` has italic, and the others ignore it.
+--
+-- A character a font lacks is drawn from Noto Sans, and failing that from DejaVu Sans, which has
+-- most symbols: ● ○ ✓ ✗ ▶ ★ ━ → ← ↑ ↓ ☀ ☁ ☂ and many more. A character no font has (most
+-- emoji, Chinese and Japanese) shows as an empty box; the developer API's layout report and
+-- @{measure} name such characters. Text is put in Unicode's composed form first, so a letter
+-- followed by a separate accent is drawn as the accented letter.
 --
 -- Text is drawn crisp: each pixel is black or white by how much of it the letter covers. With
 -- `smooth`, the edges are dithered instead, which softens the curves of large text (about 60 px
@@ -98,19 +104,32 @@ function ui.text(t) end
 -- @usage ui.image { data.photo, fit = "cover", grow = 1 }
 function ui.image(t) end
 
---- The size a node would take, before drawing it.
+--- The size a node would take, and whether it fits, before drawing it.
 --
--- Use it to decide what fits instead of guessing at letter widths. The size is what the node
--- asks for within `max_w` × `max_h`, the same way a column or row measures it. Text with
--- `fit = "shrink"` is measured at its full size.
+-- Use it to decide what fits instead of guessing at letter widths. `fits` and `cut` come from
+-- laying the node out in the space given exactly as a render would, so they agree with what is
+-- drawn: a node given `w` × `h` (or, with no limits, `needed_w` × `needed_h`) is drawn with
+-- nothing cut. Text with `fit = "shrink"` is measured at its full size.
 -- @tparam Node|string node A node made with these functions, or a string (as body text).
 -- @tparam[opt] number max_w The width available: wrapping text breaks to fit it.
 -- Unlimited if left out.
 -- @tparam[opt] number max_h The height available. Unlimited if left out.
--- @treturn table `{ w = ..., h = ... }` in pixels; for text also `lines` and `line_height`.
+-- @treturn table In whole pixels:
+--
+-- - `w`, `h`: the size it takes within the limits (what a column or row would give it);
+-- - `needed_w`: the width it would take with no limit (for wrapping text, one long line);
+-- - `needed_h`: the height it needs at `max_w`;
+-- - `fits`: whether it fits the limits with nothing cut;
+-- - `cut`: why not, as in the developer API's layout report (`too_wide`, `max_lines`,
+--   `too_tall`, `word_split`, `no_space`, `overflow`; and `missing_glyph`, which doesn't stop
+--   it fitting);
+-- - `missing`: characters no font has, if any;
+-- - for text, `lines` and `line_height`.
 -- @usage local title = ui.text { data.name, style = "large", wrap = true }
 -- local m = ui.measure(title, slot.w)
 -- local room_left = slot.h - m.h
+-- @usage -- Show the table only if it fits beside the map:
+-- if ui.measure(timetable, slot.w - 200, room_left).fits then ... end
 -- @usage -- The widest label, to size a column:
 -- local w = 0
 -- for _, s in ipairs(sessions) do w = math.max(w, ui.measure(s.label).w) end

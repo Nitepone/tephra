@@ -29,7 +29,8 @@ there. tephra registers it under that key on its first request, so there's no ne
 
 ## More
 
-- `apps/README.md`: writing apps.
+- `/docs/lua/` on a running tephra: the Lua API reference for writing apps (source in `luadoc/`,
+  generated with LDoc by `scripts/luadoc.sh`).
 - `DESIGN.md`: how tephra is put together.
 - `docs/`: the device protocol, for firmware v1.8.19.
 

@@ -1,7 +1,8 @@
 //! The JSON API the web UI uses, under `/api/v1`.
 
 use crate::display::{self, Draft};
-use crate::model::{self, Device, ScreenConfig};
+use crate::apps::AppMeta;
+use crate::model::{self, Device, ScreenConfig, StoredApp};
 use crate::{SharedState, screen};
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -20,10 +21,15 @@ pub fn router() -> Router<SharedState> {
         .route("/devices/{id}/screen", get(get_screen).put(put_screen))
         .route("/devices/{id}/screen.png", get(screen_png))
         .route("/devices/{id}/preview", post(preview_png))
-        .route("/apps", get(apps))
+        .route("/apps", get(apps).post(new_app))
         .route("/apps/reload", post(reload_apps))
+        .route("/apps/import", post(import_app))
+        .route("/apps/{id}", get(get_app).put(update_app).delete(delete_app))
+        .route("/apps/{id}/fork", post(fork_app))
+        .route("/apps/{id}/export", get(export_app))
+        .route("/apps/{id}/try", post(try_app))
         .route("/instances", get(instances).post(add_instance))
-        .route("/instances/{id}", axum::routing::put(update_instance).delete(delete_instance))
+        .route("/instances/{id}", get(get_instance).put(update_instance).delete(delete_instance))
         .route("/instances/{id}/fetch", post(fetch_instance))
         .route("/log", get(log))
 }
@@ -213,29 +219,275 @@ async fn preview_png(State(s): State<SharedState>, Path(id): Path<i64>, Json(mut
     Ok(png(display::render_png(&s, &d, Some(draft)).await?))
 }
 
-// ---- apps and their instances ----
+// ---- apps ----
 
-async fn apps(State(s): State<SharedState>) -> Json<Vec<std::sync::Arc<crate::apps::AppMeta>>> {
-    Json(s.apps.list())
+/// An app as the UI sees it.
+#[derive(Serialize)]
+struct AppOut {
+    #[serde(flatten)]
+    app: std::sync::Arc<AppMeta>,
+    instances: i64,
+    /// The Lua a new instance starts with.
+    config_template: String,
 }
 
-async fn reload_apps(State(s): State<SharedState>) -> Json<Vec<std::sync::Arc<crate::apps::AppMeta>>> {
+fn app_out(s: &SharedState, app: std::sync::Arc<AppMeta>) -> ApiResult<AppOut> {
+    let instances = model::instance_count(&s.db.conn(), &app.id)?;
+    Ok(AppOut { config_template: app.config_template(), instances, app })
+}
+
+fn app_or_404(s: &SharedState, id: &str) -> ApiResult<std::sync::Arc<AppMeta>> {
+    s.apps.get(id).ok_or(ApiError::not_found("app"))
+}
+
+/// A written app, or why it can't be changed.
+fn editable(s: &SharedState, id: &str) -> ApiResult<std::sync::Arc<AppMeta>> {
+    let app = app_or_404(s, id)?;
+    if app.builtin {
+        return Err(ApiError(StatusCode::FORBIDDEN, "built-in apps can't be changed: fork it to make your own copy".into()));
+    }
+    Ok(app)
+}
+
+async fn apps(State(s): State<SharedState>) -> ApiResult<Json<Vec<AppOut>>> {
+    Ok(Json(s.apps.list().into_iter().map(|a| app_out(&s, a)).collect::<ApiResult<_>>()?))
+}
+
+async fn get_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<Json<AppOut>> {
+    Ok(Json(app_out(&s, app_or_404(&s, &id)?)?))
+}
+
+async fn reload_apps(State(s): State<SharedState>) -> ApiResult<Json<Vec<AppOut>>> {
+    let stored = model::stored_apps(&s.db.conn())?;
     let s2 = s.clone();
-    let _ = tokio::task::spawn_blocking(move || s2.apps.reload()).await;
-    Json(s.apps.list())
+    let _ = tokio::task::spawn_blocking(move || s2.apps.reload(&stored)).await;
+    apps(State(s)).await
 }
+
+/// Saves a written app under a name no other app has, and loads it.
+fn store_app(s: &SharedState, mut a: StoredApp, rename_if_taken: bool) -> ApiResult<AppOut> {
+    a.name = a.name.trim().to_string();
+    if a.name.is_empty() {
+        return Err(ApiError::bad("an app needs a name"));
+    }
+    if s.apps.name_taken(&a.name, Some(&a.id)) {
+        if !rename_if_taken {
+            return Err(ApiError::bad(format!("another app is already called {:?}", a.name)));
+        }
+        a.name = s.apps.copy_name(&a.name);
+    }
+    model::save_app(&s.db.conn(), &a)?;
+    let meta = s.apps.put(&a);
+    app_out(s, meta)
+}
+
+fn new_app_id() -> String {
+    format!("u{}", model::random_hex(4))
+}
+
+const NEW_APP_CODE: &str = r#"-- An app returns a table. render draws it; fetch (optional) gets its data.
+-- The instance's config is run first and reaches the app as `config`.
+return {
+  refresh = "15m",
+  settings = {
+    { key = "message", label = "Message", default = "Hello from tephra" },
+  },
+
+  -- fetch = function(config)
+  --   local r = http.get("https://example.com/data.json")
+  --   return json.decode(r.body)
+  -- end,
+
+  render = function(data, slot, config)
+    return ui.column {
+      justify = "center",
+      ui.text { config.message, style = "title", align = "center", wrap = true },
+    }
+  end,
+}
+"#;
+
+async fn new_app(State(s): State<SharedState>) -> ApiResult<Json<AppOut>> {
+    let a = StoredApp {
+        id: new_app_id(),
+        name: "New app".into(),
+        description: String::new(),
+        code: NEW_APP_CODE.into(),
+        validate_code: String::new(),
+        validate_enabled: false,
+    };
+    Ok(Json(store_app(&s, a, true)?))
+}
+
+#[derive(Deserialize)]
+struct AppIn {
+    name: String,
+    #[serde(default)]
+    description: String,
+    code: String,
+    #[serde(default)]
+    validate_code: String,
+    #[serde(default)]
+    validate_enabled: bool,
+}
+
+async fn update_app(State(s): State<SharedState>, Path(id): Path<String>, Json(a): Json<AppIn>) -> ApiResult<Json<AppOut>> {
+    editable(&s, &id)?;
+    let a = StoredApp { id, name: a.name, description: a.description.trim().into(), code: a.code, validate_code: a.validate_code, validate_enabled: a.validate_enabled };
+    Ok(Json(store_app(&s, a, false)?))
+}
+
+async fn delete_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    editable(&s, &id)?;
+    let n = model::instance_count(&s.db.conn(), &id)?;
+    if n > 0 {
+        return Err(ApiError::bad(format!("delete its {n} instance{} first", if n == 1 { "" } else { "s" })));
+    }
+    model::delete_app(&s.db.conn(), &id)?;
+    s.apps.remove(&id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn fork_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<Json<AppOut>> {
+    let src = app_or_404(&s, &id)?;
+    let a = StoredApp {
+        id: new_app_id(),
+        name: s.apps.copy_name(&src.name),
+        description: src.description.clone(),
+        code: src.code.clone(),
+        validate_code: src.validate_code.clone(),
+        validate_enabled: src.validate_enabled,
+    };
+    Ok(Json(store_app(&s, a, true)?))
+}
+
+/// What an export holds: base64 of this as JSON.
+#[derive(Serialize, Deserialize)]
+struct Exported {
+    format: String,
+    version: u32,
+    name: String,
+    #[serde(default)]
+    description: String,
+    code: String,
+    #[serde(default)]
+    validate_code: String,
+    #[serde(default)]
+    validate_enabled: bool,
+}
+const EXPORT_FORMAT: &str = "tephra-app";
+
+async fn export_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    use base64::Engine;
+    let a = app_or_404(&s, &id)?;
+    let e = Exported {
+        format: EXPORT_FORMAT.into(),
+        version: 1,
+        name: a.name.clone(),
+        description: a.description.clone(),
+        code: a.code.clone(),
+        validate_code: a.validate_code.clone(),
+        validate_enabled: a.validate_enabled,
+    };
+    let data = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&e).map_err(anyhow::Error::from)?);
+    let file: String = a.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    Ok(Json(json!({ "filename": format!("{}.tephra-app", file.trim_matches('-')), "data": data })))
+}
+
+#[derive(Deserialize)]
+struct ImportIn {
+    data: String,
+}
+
+async fn import_app(State(s): State<SharedState>, Json(i): Json<ImportIn>) -> ApiResult<Json<AppOut>> {
+    use base64::Engine;
+    let compact: String = i.data.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .map_err(|_| ApiError::bad("that isn't an exported app: it isn't base64"))?;
+    let e: Exported = serde_json::from_slice(&bytes).map_err(|e| ApiError::bad(format!("that isn't an exported app: {e}")))?;
+    if e.format != EXPORT_FORMAT {
+        return Err(ApiError::bad("that isn't an exported tephra app"));
+    }
+    let a = StoredApp {
+        id: new_app_id(),
+        name: e.name,
+        description: e.description,
+        code: e.code,
+        validate_code: e.validate_code,
+        validate_enabled: e.validate_enabled,
+    };
+    Ok(Json(store_app(&s, a, true)?))
+}
+
+#[derive(Deserialize)]
+struct TryIn {
+    /// Unsaved code; ignored for built-in apps, which run as installed.
+    code: Option<String>,
+    validate_code: Option<String>,
+    validate_enabled: Option<bool>,
+    #[serde(default)]
+    config: String,
+    #[serde(default = "full")]
+    size: String,
+    #[serde(default = "og_w")]
+    width: u32,
+    #[serde(default = "og_h")]
+    height: u32,
+}
+fn full() -> String {
+    "full".into()
+}
+fn og_w() -> u32 {
+    800
+}
+fn og_h() -> u32 {
+    480
+}
+
+/// Runs an app (with unsaved code, for a written app) and returns what it draws.
+async fn try_app(State(s): State<SharedState>, Path(id): Path<String>, Json(t): Json<TryIn>) -> ApiResult<Response> {
+    let app = app_or_404(&s, &id)?;
+    let meta = if app.builtin {
+        (*app).clone()
+    } else {
+        crate::apps::stored_meta(&StoredApp {
+            id: app.id.clone(),
+            name: app.name.clone(),
+            description: app.description.clone(),
+            code: t.code.unwrap_or_else(|| app.code.clone()),
+            validate_code: t.validate_code.unwrap_or_else(|| app.validate_code.clone()),
+            validate_enabled: t.validate_enabled.unwrap_or(app.validate_enabled),
+        })
+    };
+    let size = match t.size.as_str() {
+        "large" => "large",
+        "half" => "half",
+        "small" => "small",
+        _ => "full",
+    };
+    let (w, h) = (t.width.clamp(100, 4000), t.height.clamp(100, 4000));
+    Ok(png(display::try_app(&s, meta, t.config, w, h, size).await?))
+}
+
+// ---- instances ----
 
 async fn instances(State(s): State<SharedState>) -> ApiResult<Json<Vec<model::Instance>>> {
     Ok(Json(model::instances(&s.db.conn())?))
+}
+
+async fn get_instance(State(s): State<SharedState>, Path(id): Path<i64>) -> ApiResult<Json<model::Instance>> {
+    Ok(Json(model::instance(&s.db.conn(), id)?.ok_or(ApiError::not_found("app instance"))?))
 }
 
 #[derive(Deserialize)]
 struct InstanceIn {
     #[serde(default)]
     app: String,
-    name: String,
     #[serde(default)]
-    settings: serde_json::Value,
+    name: String,
+    /// Lua. Omitted on create: the app's template.
+    config: Option<String>,
 }
 
 /// The instance, after the fetch that saving it triggers.
@@ -252,18 +504,20 @@ async fn saved(s: &SharedState, id: i64) -> ApiResult<Json<InstanceSaved>> {
     Ok(Json(InstanceSaved { instance, fetch_error }))
 }
 
-fn settings_object(v: serde_json::Value) -> ApiResult<serde_json::Value> {
-    match v {
-        serde_json::Value::Null => Ok(json!({})),
-        v @ serde_json::Value::Object(_) => Ok(v),
-        _ => Err(ApiError::bad("settings must be an object")),
-    }
+/// A config that doesn't run, or doesn't pass the app's check, is refused.
+async fn check(app: std::sync::Arc<AppMeta>, config: String) -> ApiResult<()> {
+    let r = tokio::task::spawn_blocking(move || crate::apps::check_config(&app, &config)).await.map_err(anyhow::Error::from)?;
+    r.map_err(|e| ApiError::bad(format!("the config isn't valid: {e}")))
 }
 
 async fn add_instance(State(s): State<SharedState>, Json(i): Json<InstanceIn>) -> ApiResult<Json<InstanceSaved>> {
     let app = s.apps.get(&i.app).ok_or_else(|| ApiError::bad(format!("no app {:?}", i.app)))?;
     let name = if i.name.trim().is_empty() { app.name.clone() } else { i.name.trim().to_string() };
-    let id = model::add_instance(&s.db.conn(), &app.id, &name, &settings_object(i.settings)?)?;
+    let config = i.config.unwrap_or_else(|| app.config_template());
+    if app.error.is_none() {
+        check(app.clone(), config.clone()).await?;
+    }
+    let id = model::add_instance(&s.db.conn(), &app.id, &name, &config)?;
     saved(&s, id).await
 }
 
@@ -272,9 +526,12 @@ async fn update_instance(State(s): State<SharedState>, Path(id): Path<i64>, Json
     if name.is_empty() {
         return Err(ApiError::bad("a name is needed"));
     }
-    if !model::update_instance(&s.db.conn(), id, name, &settings_object(i.settings)?)? {
-        return Err(ApiError::not_found("app instance"));
+    let inst = model::instance(&s.db.conn(), id)?.ok_or(ApiError::not_found("app instance"))?;
+    let config = i.config.unwrap_or(inst.config);
+    if let Some(app) = s.apps.get(&inst.app).filter(|a| a.error.is_none()) {
+        check(app, config.clone()).await?;
     }
+    model::update_instance(&s.db.conn(), id, name, &config)?;
     saved(&s, id).await
 }
 

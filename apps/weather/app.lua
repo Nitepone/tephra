@@ -9,14 +9,14 @@ return {
     { key = "units", label = "Units", type = "choice", options = { "metric", "imperial" }, default = "metric" },
   },
 
-  fetch = function(s)
-    local r = http.get("https://wttr.in/" .. http.urlencode(s.location) .. "?format=j1")
+  fetch = function(config)
+    local r = http.get("https://wttr.in/" .. http.urlencode(config.location) .. "?format=j1")
     if not r.ok then error("wttr.in answered HTTP " .. r.status) end
     local w = json.decode(r.body)
     local now = w.current_condition[1]
     local area = w.nearest_area and w.nearest_area[1]
     local out = {
-      place = area and area.areaName[1].value or s.location,
+      place = area and area.areaName[1].value or config.location,
       desc = now.weatherDesc[1].value,
       temp_c = tonumber(now.temp_C), temp_f = tonumber(now.temp_F),
       feels_c = tonumber(now.FeelsLikeC), feels_f = tonumber(now.FeelsLikeF),
@@ -37,9 +37,9 @@ return {
     return out
   end,
 
-  render = function(w, slot, s)
+  render = function(w, slot, config)
     if not w then return ui.text { "Waiting for the first forecast…", style = "body" } end
-    local imperial = s.units == "imperial"
+    local imperial = config.units == "imperial"
     local function t(c, f) return string.format("%d°", imperial and f or c) end
     local wind = imperial and (w.wind_mph .. " mph") or (w.wind_kmh .. " km/h")
 

@@ -1,0 +1,482 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Functions">Functions</a></li>
+<li><a href="#Tables">Tables</a></li>
+</ul>
+
+
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><strong>ui</strong></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+<h1>Module <code>ui</code></h1>
+<p>Building what an app draws.</p>
+<p> <code>render</code> returns a tree of nodes made with these functions. Each takes a table: its children
+ (or, for <a href="../modules/ui.html#text">text</a> and <a href="../modules/ui.html#image">image</a>, its content) in order, and its options by name. A single value
+ also works: <code>ui.text &quot;hello&quot;</code>.</p>
+
+<p> A <code>nil</code> or <code>false</code> child is skipped, so a child can be conditional:</p>
+
+
+<pre>
+ui.<span class="function-name">column</span> {
+  ui.<span class="function-name">text</span> { <span class="string">"always"</span> },
+  show_more <span class="keyword">and</span> ui.<span class="function-name">text</span> { <span class="string">"sometimes"</span> } <span class="keyword">or</span> <span class="keyword">nil</span>,
+}
+</pre>
+
+<p> Containers place their children one after another along their axis. Children that set <code>grow</code>
+ share the space left over; otherwise <code>justify</code> places them. Across the axis, <code>align</code> places
+ each child, stretching it to the full width (or height) by default.</p>
+
+<p> Everything is drawn in pure black and white: text is crisp, images are dithered.</p>
+
+
+<h2><a href="#Functions">Functions</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#column">column(t)</a></td>
+	<td class="summary">Children one under another.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#row">row(t)</a></td>
+	<td class="summary">Children side by side.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#box">box(t)</a></td>
+	<td class="summary">A column with a frame.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#text">text(t)</a></td>
+	<td class="summary">Text.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#image">image(t)</a></td>
+	<td class="summary">An image, scaled to its space and dithered to black and white.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#rule">rule([t])</a></td>
+	<td class="summary">A line across its parent: horizontal in a column, vertical in a row.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#spacer">spacer([t])</a></td>
+	<td class="summary">Empty space that takes whatever is left over (as if <code>grow = 1</code>).</td>
+	</tr>
+</table>
+<h2><a href="#Tables">Tables</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#Node">Node</a></td>
+	<td class="summary">Options every node takes.</td>
+	</tr>
+</table>
+
+<br/>
+<br/>
+
+
+    <h2 class="section-header "><a name="Functions"></a>Functions</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "column"></a>
+    <strong>column(t)</strong>
+    </dt>
+    <dd>
+    Children one under another.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span> The children, then these options:
+        <ul>
+        <li><span class="parameter">gap</span>
+            <span class="types"><span class="type">number</span></span>
+         Pixels between children.
+         (<em>default</em> 6)
+        </li>
+        <li><span class="parameter">align</span>
+            <span class="types"><span class="type">string</span></span>
+         Across: <code>&quot;start&quot;</code>, <code>&quot;center&quot;</code>, <code>&quot;end&quot;</code> or <code>&quot;stretch&quot;</code>.
+         (<em>default</em> "stretch")
+        </li>
+        <li><span class="parameter">justify</span>
+            <span class="types"><span class="type">string</span></span>
+         Along: <code>&quot;start&quot;</code>, <code>&quot;center&quot;</code>, <code>&quot;end&quot;</code> or <code>&quot;between&quot;</code>.
+ Ignored when a child grows.
+         (<em>default</em> "start")
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">column</span> { justify = <span class="string">"center"</span>, ui.<span class="function-name">text</span> <span class="string">"a"</span>, ui.<span class="function-name">text</span> <span class="string">"b"</span> }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "row"></a>
+    <strong>row(t)</strong>
+    </dt>
+    <dd>
+    Children side by side.  Takes the same options as <a href="../modules/ui.html#column">column</a>, with a default <code>gap</code> of 12.
+ A <a href="../modules/ui.html#rule">rule</a> in a row is vertical.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         The children, then options.
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">row</span> { align = <span class="string">"center"</span>, ui.<span class="function-name">text</span> { <span class="string">"72°"</span>, style = <span class="string">"large"</span> }, ui.<span class="function-name">text</span> <span class="string">"Sunny"</span> }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "box"></a>
+    <strong>box(t)</strong>
+    </dt>
+    <dd>
+    A column with a frame.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span> The children, then the options of <a href="../modules/ui.html#column">column</a> and:
+        <ul>
+        <li><span class="parameter">padding</span>
+            <span class="types"><span class="type">number</span></span>
+         Pixels between the frame and the children.
+         (<em>default</em> 10)
+        </li>
+        <li><span class="parameter">border</span>
+            <span class="types"><span class="type">number</span></span>
+         Width of the frame; 0 for none.
+         (<em>default</em> 2)
+        </li>
+        <li><span class="parameter">invert</span>
+            <span class="types"><span class="type">bool</span></span>
+         White on black.
+         (<em>default</em> false)
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">box</span> { invert = <span class="keyword">true</span>, ui.<span class="function-name">text</span> { <span class="string">"ALERT"</span>, style = <span class="string">"title"</span> } }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "text"></a>
+    <strong>text(t)</strong>
+    </dt>
+    <dd>
+    Text. </p>
+
+<p> Styles: <code>small</code> 16 px, <code>body</code> 22 px (the default), <code>label</code> 16 px bold, <code>title</code> 26 px bold,
+ <code>large</code> 44 px bold, <code>huge</code> 96 px bold. The typeface is Noto Sans.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span> The text (a string or a number), then options:
+        <ul>
+        <li><span class="parameter">style</span>
+            <span class="types"><span class="type">string</span></span>
+         One of the styles above.
+         (<em>default</em> "body")
+        </li>
+        <li><span class="parameter">size</span>
+            <span class="types"><span class="type">number</span></span>
+         A size in pixels instead of the style's.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">bold</span>
+            <span class="types"><span class="type">bool</span></span>
+         Bold or not, instead of the style's.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">wrap</span>
+            <span class="types"><span class="type">bool</span></span>
+         Break into lines to fit the width. Without it, a line that
+ doesn't fit ends in "…". Newlines always break.
+         (<em>default</em> false)
+        </li>
+        <li><span class="parameter">max_lines</span>
+            <span class="types"><span class="type">int</span></span>
+         At most this many lines; the last ends in "…" if cut.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">align</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;left&quot;</code>, <code>&quot;center&quot;</code> or <code>&quot;right&quot;</code>.
+         (<em>default</em> "left")
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">text</span> { <span class="string">"A long forecast for the week…"</span>, wrap = <span class="keyword">true</span>, max_lines = <span class="number">3</span> }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "image"></a>
+    <strong>image(t)</strong>
+    </dt>
+    <dd>
+    An image, scaled to its space and dithered to black and white. </p>
+
+<p> PNG, JPEG, GIF and WebP work. Transparent areas become white.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span> The source, then options. The source is a reference from <a href="../modules/globals.html#blob">globals.blob</a>,
+ or, for built-in apps only, a file in the app's directory.
+        <ul>
+        <li><span class="parameter">fit</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;contain&quot;</code> shows all of it; <code>&quot;cover&quot;</code> fills the space
+ and crops the edges.
+         (<em>default</em> "contain")
+        </li>
+        <li><span class="parameter">dither</span>
+            <span class="types"><span class="type">bool</span></span>
+         Dither for photos; turn off for line art and text.
+         (<em>default</em> true)
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">image</span> { data.photo, fit = <span class="string">"cover"</span>, grow = <span class="number">1</span> }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "rule"></a>
+    <strong>rule([t])</strong>
+    </dt>
+    <dd>
+    A line across its parent: horizontal in a column, vertical in a row.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span> Options:
+        <ul>
+        <li><span class="parameter">thickness</span>
+            <span class="types"><span class="type">number</span></span>
+         In pixels.
+         (<em>default</em> 2)
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "spacer"></a>
+    <strong>spacer([t])</strong>
+    </dt>
+    <dd>
+    Empty space that takes whatever is left over (as if <code>grow = 1</code>).
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         Options.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">ui.<span class="function-name">column</span> { ui.<span class="function-name">text</span> <span class="string">"top"</span>, ui.<span class="function-name">spacer</span> {}, ui.<span class="function-name">text</span> <span class="string">"bottom"</span> }</pre>
+    </ul>
+
+</dd>
+</dl>
+    <h2 class="section-header "><a name="Tables"></a>Tables</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "Node"></a>
+    <strong>Node</strong>
+    </dt>
+    <dd>
+    Options every node takes.
+
+
+    <h3>Fields:</h3>
+    <ul>
+        <li><span class="parameter">grow</span>
+            <span class="types"><span class="type">number</span></span>
+         A share of the space the parent has left over.
+         (<em>default</em> 0)
+        </li>
+        <li><span class="parameter">width</span>
+            <span class="types"><span class="type">number</span></span>
+         A fixed width in pixels.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">height</span>
+            <span class="types"><span class="type">number</span></span>
+         A fixed height in pixels.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+</dl>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

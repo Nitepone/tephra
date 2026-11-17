@@ -9,20 +9,20 @@ return {
     { key = "show_date", label = "Show the date", type = "bool", default = true },
   },
 
-  render = function(_, slot, s)
+  render = function(_, slot, config)
     local time
-    if s.hour24 then
+    if config.hour24 then
       time = os.date("%H:%M")
     else
       time = (os.date("%I:%M"):gsub("^0", "")) .. os.date(" %p")
     end
     -- As large as the slot allows: the digits are about half as wide as they are tall.
-    local size = math.min(slot.h * (s.show_date and 0.5 or 0.7), slot.w / (#time * 0.6))
+    local size = math.min(slot.h * (config.show_date and 0.5 or 0.7), slot.w / (#time * 0.6))
     local date_style = slot.size == "small" and "body" or "title"
     return ui.column {
       justify = "center",
       ui.text { time, size = size, bold = true, align = "center" },
-      s.show_date and ui.text { (os.date("%A, %B %d"):gsub(" 0", " ")), style = date_style, align = "center" } or nil,
+      config.show_date and ui.text { (os.date("%A, %B %d"):gsub(" 0", " ")), style = date_style, align = "center" } or nil,
     }
   end,
 }

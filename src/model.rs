@@ -206,24 +206,24 @@ pub struct Instance {
     pub id: i64,
     pub app: String,
     pub name: String,
-    pub settings: serde_json::Value,
+    /// Lua, run before the app; what it assigns becomes the app's `config`.
+    pub config: String,
     pub fetched_ms: Option<i64>,
     pub error: Option<String>,
     #[serde(skip)]
     pub data: serde_json::Value,
 }
 
-const INSTANCE_SELECT: &str = "SELECT i.id, i.app, i.name, i.settings, d.fetched_ms, d.error, d.data
+const INSTANCE_SELECT: &str = "SELECT i.id, i.app, i.name, i.config, d.fetched_ms, d.error, d.data
      FROM instances i LEFT JOIN app_data d ON d.instance_id = i.id";
 
 fn instance_row(r: &Row) -> rusqlite::Result<Instance> {
-    let settings: String = r.get(3)?;
     let data: Option<String> = r.get(6)?;
     Ok(Instance {
         id: r.get(0)?,
         app: r.get(1)?,
         name: r.get(2)?,
-        settings: serde_json::from_str(&settings).unwrap_or_default(),
+        config: r.get(3)?,
         fetched_ms: r.get(4)?,
         error: r.get(5)?,
         data: data.and_then(|d| serde_json::from_str(&d).ok()).unwrap_or_default(),
@@ -239,16 +239,65 @@ pub fn instance(c: &Connection, id: i64) -> rusqlite::Result<Option<Instance>> {
     c.query_row(&format!("{INSTANCE_SELECT} WHERE i.id = ?"), [id], instance_row).optional()
 }
 
-pub fn add_instance(c: &Connection, app: &str, name: &str, settings: &serde_json::Value) -> rusqlite::Result<i64> {
-    c.execute(
-        "INSERT INTO instances (app, name, settings, created_ms) VALUES (?, ?, ?, ?)",
-        params![app, name, settings.to_string(), now_ms()],
-    )?;
+pub fn add_instance(c: &Connection, app: &str, name: &str, config: &str) -> rusqlite::Result<i64> {
+    c.execute("INSERT INTO instances (app, name, config, created_ms) VALUES (?, ?, ?, ?)", params![app, name, config, now_ms()])?;
     Ok(c.last_insert_rowid())
 }
 
-pub fn update_instance(c: &Connection, id: i64, name: &str, settings: &serde_json::Value) -> rusqlite::Result<bool> {
-    Ok(c.execute("UPDATE instances SET name = ?, settings = ? WHERE id = ?", params![name, settings.to_string(), id])? > 0)
+pub fn update_instance(c: &Connection, id: i64, name: &str, config: &str) -> rusqlite::Result<bool> {
+    Ok(c.execute("UPDATE instances SET name = ?, config = ? WHERE id = ?", params![name, config, id])? > 0)
+}
+
+pub fn instance_count(c: &Connection, app: &str) -> rusqlite::Result<i64> {
+    c.query_row("SELECT count(*) FROM instances WHERE app = ?", [app], |r| r.get(0))
+}
+
+// ---- apps written in the UI ----
+
+/// An app written, forked or imported in the UI. Built-in apps are files instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredApp {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub code: String,
+    #[serde(default)]
+    pub validate_code: String,
+    #[serde(default)]
+    pub validate_enabled: bool,
+}
+
+pub fn stored_apps(c: &Connection) -> rusqlite::Result<Vec<StoredApp>> {
+    let mut st = c.prepare("SELECT id, name, description, code, validate_code, validate_enabled FROM apps ORDER BY name")?;
+    st.query_map([], |r| {
+        Ok(StoredApp {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            description: r.get(2)?,
+            code: r.get(3)?,
+            validate_code: r.get(4)?,
+            validate_enabled: r.get(5)?,
+        })
+    })?
+    .collect()
+}
+
+/// Inserts or replaces a written app.
+pub fn save_app(c: &Connection, a: &StoredApp) -> rusqlite::Result<()> {
+    let now = now_ms();
+    c.execute(
+        "INSERT INTO apps (id, name, description, code, validate_code, validate_enabled, created_ms, updated_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT (id) DO UPDATE SET name = ?2, description = ?3, code = ?4, validate_code = ?5,
+             validate_enabled = ?6, updated_ms = ?7",
+        params![a.id, a.name, a.description, a.code, a.validate_code, a.validate_enabled, now],
+    )?;
+    Ok(())
+}
+
+pub fn delete_app(c: &Connection, id: &str) -> rusqlite::Result<bool> {
+    Ok(c.execute("DELETE FROM apps WHERE id = ?", [id])? > 0)
 }
 
 /// Stores a fetch result. A failed fetch keeps the previous data and records the error.

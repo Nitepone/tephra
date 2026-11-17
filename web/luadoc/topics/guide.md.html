@@ -1,0 +1,186 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Where_apps_live">Where apps live </a></li>
+<li><a href="#What_runs__in_order">What runs, in order </a></li>
+<li><a href="#A_first_app">A first app </a></li>
+<li><a href="#Getting_data">Getting data </a></li>
+<li><a href="#Drawing">Drawing </a></li>
+<li><a href="#Trying_it">Trying it </a></li>
+<li><a href="#Examples">Examples </a></li>
+</ul>
+
+
+<h2>Topics</h2>
+<ul class="">
+  <li><strong>guide</strong></li>
+</ul>
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+
+<h1>Writing an app</h1>
+
+<p>An app is Lua code that returns a table (see <a href="../modules/app.html#">app</a>). It draws one slot of a device's screen:
+the whole screen, or a half, third or quarter of it.</p>
+
+<p><a name="Where_apps_live"></a></p>
+<h2>Where apps live</h2>
+
+<p><strong>Built-in apps</strong> are directories in tephra's <code>apps</code> directory, each with an <code>app.lua</code> and
+optionally a <code>validate.lua</code> (its config check). They are read-only in the UI.</p>
+
+<p><strong>Your apps</strong> are written in the UI. On the Apps page, use <strong>New app</strong>, <strong>Create copy (fork)</strong> of
+any app, or <strong>Import</strong> an exported one. They are stored in tephra's database. Names are unique,
+ignoring case, and copies are named "Name Copy 1", "Name Copy 2" and so on.</p>
+
+<p><strong>Export</strong> saves an app as a <code>.tephra-app</code> file, holding its name, description, code and config
+check as base64-encoded JSON. <strong>Import</strong> reads one back.</p>
+
+<p><a name="What_runs__in_order"></a></p>
+<h2>What runs, in order</h2>
+
+<p>Each time tephra needs an app, it runs in a fresh Lua state:</p>
+
+<ol>
+    <li><strong>The instance's config.</strong> Each instance (an app placed somewhere with its own config) has
+    config code, plain Lua: <code>units = &quot;imperial&quot;</code> sets <code>config.units</code>. See <a href="../modules/globals.html#config">globals.config</a>.</li>
+    <li><strong>The defaults.</strong> Anything the config left out takes its default from the app's <code>settings</code>.</li>
+    <li><strong>The config check</strong>, if the app has one: Lua that stops a bad config with
+    <code>assert(ok, &quot;message&quot;)</code> or <code>error(&quot;message&quot;)</code>. A config that fails can't be saved, and a
+    slot whose config fails shows the message.</li>
+    <li><strong>The app's code</strong>, and then its <a href="../modules/app.html#fetch">fetch</a> (on a schedule, to get data) or its
+    <a href="../modules/app.html#render">render</a> (to draw).</li>
+</ol>
+
+<p><a name="A_first_app"></a></p>
+<h2>A first app</h2>
+
+
+<pre>
+<span class="keyword">return</span> {
+  refresh = <span class="string">"15m"</span>,
+  settings = {
+    { key = <span class="string">"message"</span>, label = <span class="string">"Message"</span>, default = <span class="string">"Hello"</span> },
+  },
+  render = <span class="keyword">function</span>(data, slot, config)
+    <span class="keyword">return</span> ui.<span class="function-name">column</span> {
+      justify = <span class="string">"center"</span>,
+      ui.<span class="function-name">text</span> { config.message, style = <span class="string">"title"</span>, wrap = <span class="keyword">true</span> },
+    }
+  <span class="keyword">end</span>,
+}
+</pre>
+
+<p>An instance's config for it could be:</p>
+
+
+<pre>
+message = <span class="string">"Good morning, "</span> .. <span class="global">os</span>.<span class="function-name">date</span>(<span class="string">"%A"</span>)
+</pre>
+
+<p><a name="Getting_data"></a></p>
+<h2>Getting data</h2>
+
+<p><code>fetch</code> runs on the app's <code>refresh</code> schedule and returns plain data, which tephra stores and
+passes to <code>render</code>. It is the only place <a href="../modules/http.html#">http</a> works. Binary data, such as images, goes
+through <a href="../modules/globals.html#blob">globals.blob</a>.</p>
+
+
+<pre>
+fetch = <span class="keyword">function</span>(config)
+  <span class="keyword">local</span> r = http.<span class="function-name">get</span>(<span class="string">"https://wttr.in/"</span> .. http.<span class="function-name">urlencode</span>(config.location) .. <span class="string">"?format=j1"</span>)
+  <span class="keyword">if</span> <span class="keyword">not</span> r.ok <span class="keyword">then</span> <span class="global">error</span>(<span class="string">"wttr.in answered HTTP "</span> .. r.status) <span class="keyword">end</span>
+  <span class="keyword">local</span> w = json.<span class="function-name">decode</span>(r.body)
+  <span class="keyword">return</span> { temp = w.current_condition[<span class="number">1</span>].temp_C }
+<span class="keyword">end</span>,
+</pre>
+
+<p>When a fetch fails, the previous data stays and the error is shown on the Apps page.</p>
+
+<p><a name="Drawing"></a></p>
+<h2>Drawing</h2>
+
+<p><code>render</code> returns nodes built with <a href="../modules/ui.html#">ui</a>: columns, rows, boxes, text, images, rules and spacers.
+<code>slot.w</code> and <code>slot.h</code> are the pixels available, and <code>slot.size</code> is <code>&quot;full&quot;</code>, <code>&quot;large&quot;</code>, <code>&quot;half&quot;</code>
+or <code>&quot;small&quot;</code> (see <a href="../modules/app.html#Slot">app.Slot</a>). Show less in small slots:</p>
+
+
+<pre>
+render = <span class="keyword">function</span>(data, slot, config)
+  <span class="keyword">if</span> <span class="keyword">not</span> data <span class="keyword">then</span> <span class="keyword">return</span> ui.<span class="function-name">text</span> <span class="string">"Waiting for data…"</span> <span class="keyword">end</span>
+  <span class="keyword">return</span> ui.<span class="function-name">column</span> {
+    ui.<span class="function-name">text</span> { data.temp .. <span class="string">"°"</span>, style = <span class="string">"huge"</span> },
+    slot.size ~= <span class="string">"small"</span> <span class="keyword">and</span> ui.<span class="function-name">text</span> { data.summary } <span class="keyword">or</span> <span class="keyword">nil</span>,
+  }
+<span class="keyword">end</span>,
+</pre>
+
+<p>The panel is black and white. Text is drawn crisp; images are dithered.</p>
+
+<p><a name="Trying_it"></a></p>
+<h2>Trying it</h2>
+
+<p>The app's page has a <strong>Try it</strong> panel: it runs a config, the fetch and the render once, at a
+chosen slot size, with the code as it stands in the editor, saved or not. The instance page has
+the same panel for its config. Errors are drawn where the app would be.</p>
+
+<p><a name="Examples"></a></p>
+<h2>Examples</h2>
+
+<p>tephra's built-in apps are complete examples: <strong>Clock</strong> (render only), <strong>Weather</strong> (fetch from
+wttr.in, a different layout for small slots, a config check) and <strong>Image</strong> (binary data through
+<code>blob</code>). Open one on the Apps page to read its code, or fork it to change it.</p>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

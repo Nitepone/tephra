@@ -1,0 +1,348 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Functions">Functions</a></li>
+<li><a href="#Tables">Tables</a></li>
+</ul>
+
+
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><strong>app</strong></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+<h1>Module <code>app</code></h1>
+<p>The table an app's code returns.</p>
+<p>
+
+
+<p> An app's code runs and returns one table describing the app. Only <a href="../modules/app.html#render">render</a> is required.</p>
+
+
+<pre>
+<span class="keyword">return</span> {
+  refresh = <span class="string">"30m"</span>,
+  settings = {
+    { key = <span class="string">"location"</span>, label = <span class="string">"Location"</span>, default = <span class="string">"Seattle"</span> },
+  },
+  fetch = <span class="keyword">function</span>(config)
+    <span class="keyword">local</span> r = http.<span class="function-name">get</span>(<span class="string">"https://wttr.in/"</span> .. http.<span class="function-name">urlencode</span>(config.location) .. <span class="string">"?format=j1"</span>)
+    <span class="keyword">return</span> json.<span class="function-name">decode</span>(r.body)
+  <span class="keyword">end</span>,
+  render = <span class="keyword">function</span>(data, slot, config)
+    <span class="keyword">return</span> ui.<span class="function-name">text</span> { data.current_condition[<span class="number">1</span>].temp_C .. <span class="string">"°"</span>, style = <span class="string">"huge"</span> }
+  <span class="keyword">end</span>,
+}
+</pre>
+
+</p>
+
+
+<h2><a href="#Functions">Functions</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#fetch">fetch(config)</a></td>
+	<td class="summary">Gets the app's data.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#render">render(data, slot, config)</a></td>
+	<td class="summary">Draws the app.</td>
+	</tr>
+</table>
+<h2><a href="#Tables">Tables</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#App">App</a></td>
+	<td class="summary">The app table.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#Setting">Setting</a></td>
+	<td class="summary">One setting an app documents.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#Slot">Slot</a></td>
+	<td class="summary">The space <a href="../modules/app.html#render">render</a> draws into.</td>
+	</tr>
+</table>
+
+<br/>
+<br/>
+
+
+    <h2 class="section-header "><a name="Functions"></a>Functions</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "fetch"></a>
+    <strong>fetch(config)</strong>
+    </dt>
+    <dd>
+    Gets the app's data.  Optional.</p>
+
+<p> Runs on the app's schedule (<code>refresh</code>), when an instance is saved, and on <strong>Fetch now</strong>. It may
+ take up to 60 seconds and is the only place <a href="../modules/http.html#">http</a> is available. What it returns is stored
+ and handed to <a href="../modules/app.html#render">render</a>. If it raises an error, the previous data is kept and the error is
+ shown in the UI.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">config</span>
+            <span class="types"><span class="type">table</span></span>
+         The instance's config.
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+        Plain data: tables, strings, numbers and booleans. Store binary data with <code>blob</code> first.
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">fetch = <span class="keyword">function</span>(config)
+  <span class="keyword">local</span> r = http.<span class="function-name">get</span>(config.url)
+  <span class="keyword">if</span> <span class="keyword">not</span> r.ok <span class="keyword">then</span> <span class="global">error</span>(<span class="string">"HTTP "</span> .. r.status) <span class="keyword">end</span>
+  <span class="keyword">return</span> { image = <span class="function-name">blob</span>(r.body) }
+<span class="keyword">end</span></pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "render"></a>
+    <strong>render(data, slot, config)</strong>
+    </dt>
+    <dd>
+    Draws the app. </p>
+
+<p> Runs for every image tephra makes for a device, and for every preview. It must finish within
+ 2 seconds and has no network: do slow work in <a href="../modules/app.html#fetch">fetch</a>.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">data</span>
+         What <a href="../modules/app.html#fetch">fetch</a> last returned; nil before the first fetch, or for apps without one.
+        </li>
+        <li><span class="parameter">slot</span>
+            <span class="types"><a class="type" href="../modules/app.html#Slot">Slot</a></span>
+         The space to draw into.
+        </li>
+        <li><span class="parameter">config</span>
+            <span class="types"><span class="type">table</span></span>
+         The instance's config.
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/ui.html#Node">ui.Node</a></span>
+        What to draw: build it with the <a href="../modules/ui.html#">ui</a> functions.
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">render = <span class="keyword">function</span>(data, slot, config)
+  <span class="keyword">return</span> ui.<span class="function-name">column</span> {
+    ui.<span class="function-name">text</span> { config.title, style = <span class="string">"title"</span> },
+    slot.size ~= <span class="string">"small"</span> <span class="keyword">and</span> ui.<span class="function-name">text</span> { data.summary, wrap = <span class="keyword">true</span> } <span class="keyword">or</span> <span class="keyword">nil</span>,
+  }
+<span class="keyword">end</span></pre>
+    </ul>
+
+</dd>
+</dl>
+    <h2 class="section-header "><a name="Tables"></a>Tables</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "App"></a>
+    <strong>App</strong>
+    </dt>
+    <dd>
+    The app table.
+
+
+    <h3>Fields:</h3>
+    <ul>
+        <li><span class="parameter">name</span>
+            <span class="types"><span class="type">string</span></span>
+         Built-in apps only: the name shown in the UI. Apps written in tephra
+ use their Name field instead.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">description</span>
+            <span class="types"><span class="type">string</span></span>
+         Built-in apps only, like <code>name</code>.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">refresh</span>
+            <span class="types"><span class="type">string</span> or <span class="type">number</span></span>
+         How often <a href="../modules/app.html#fetch">fetch</a> runs: seconds, or a duration such as
+ <code>&quot;90s&quot;</code>, <code>&quot;15m&quot;</code>, <code>&quot;1h&quot;</code> or <code>&quot;1d&quot;</code> (at least a minute). A device showing the app refreshes at
+ least this often, within the device's own limits.
+         (<em>default</em> "15m")
+        </li>
+        <li><span class="parameter">settings</span>
+            <span class="types"><a class="type" href="../modules/app.html#Setting">{Setting,...}</a></span>
+         What a config may set, with defaults.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">fetch</span>
+            <span class="types"><span class="type">function</span></span>
+         Gets the app's data: see <a href="../modules/app.html#fetch">fetch</a>.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">render</span>
+            <span class="types"><span class="type">function</span></span>
+         Draws the app: see <a href="../modules/app.html#render">render</a>.
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+    <dt>
+    <a name = "Setting"></a>
+    <strong>Setting</strong>
+    </dt>
+    <dd>
+    One setting an app documents. </p>
+
+<p> Settings are documentation and defaults, not a form: a new instance's config is written from
+ them, and anything a config leaves out takes its <code>default</code>.
+
+
+    <h3>Fields:</h3>
+    <ul>
+        <li><span class="parameter">key</span>
+            <span class="types"><span class="type">string</span></span>
+         The name a config assigns, such as <code>location</code>.
+        </li>
+        <li><span class="parameter">label</span>
+            <span class="types"><span class="type">string</span></span>
+         A short description, written as a comment in new configs.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">type</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;string&quot;</code>, <code>&quot;text&quot;</code>, <code>&quot;number&quot;</code>, <code>&quot;bool&quot;</code> or <code>&quot;choice&quot;</code>.
+ Documentation only.
+         (<em>default</em> "string")
+        </li>
+        <li><span class="parameter">options</span>
+            <span class="types"><span class="type">{string,...}</span></span>
+         For a choice: the values allowed.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">default</span>
+            <span class="types"><span class="type">any</span></span>
+         The value when a config leaves this out.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">help</span>
+            <span class="types"><span class="type">string</span></span>
+         A longer explanation, also written into new configs.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+    <dt>
+    <a name = "Slot"></a>
+    <strong>Slot</strong>
+    </dt>
+    <dd>
+    The space <a href="../modules/app.html#render">render</a> draws into.
+
+
+    <h3>Fields:</h3>
+    <ul>
+        <li><span class="parameter">w</span>
+            <span class="types"><span class="type">int</span></span>
+         Width in pixels.
+        </li>
+        <li><span class="parameter">h</span>
+            <span class="types"><span class="type">int</span></span>
+         Height in pixels.
+        </li>
+        <li><span class="parameter">size</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;full&quot;</code> (the whole screen), <code>&quot;large&quot;</code> (two thirds), <code>&quot;half&quot;</code> or <code>&quot;small&quot;</code>
+ (a third, a quarter, or a sixth). Use it to show less in small slots.
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+</dl>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

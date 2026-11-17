@@ -1,12 +1,16 @@
-//! Lua apps: loading `apps/<id>/app.lua`, and running its `fetch` and `render` in a sandbox.
+//! Lua apps: built-in ones loaded from `apps/<id>/app.lua`, and ones written, forked or
+//! imported in the UI, stored in the database. Running one means, in a fresh sandboxed Lua state:
+//! the instance's config (plain Lua), the app's defaults for anything it left out, the app's
+//! optional config check, and then the app itself.
 //!
-//! Every call gets a fresh Lua state, so apps can't keep state between calls or interfere with
-//! each other, and a crashed or runaway script costs nothing beyond its own call. Calls block;
-//! run them with `spawn_blocking`.
+//! A fresh state per call means apps can't keep state between calls or interfere with each
+//! other, and a crashed or runaway script costs nothing beyond its own call. Calls block; run
+//! them with `spawn_blocking`.
 
+use crate::model::StoredApp;
+use crate::render::decode_gray;
 use crate::render::font::TextStyle;
 use crate::render::layout::{Align, Common, Dir, Fit, Justify, Node, TextAlign};
-use crate::render::decode_gray;
 use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, Value, VmState};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,13 +19,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-/// One field of an app's settings form.
+/// A setting an app documents: its default fills in for a config that leaves it out, and it
+/// makes up the starting config of a new instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingField {
     pub key: String,
     #[serde(default)]
     pub label: String,
-    /// `string`, `text` (several lines), `number`, `bool` or `choice`.
+    /// `string`, `text`, `number`, `bool` or `choice`: documentation only, since configs are Lua.
     #[serde(rename = "type", default = "default_type")]
     pub kind: String,
     #[serde(default)]
@@ -40,42 +45,64 @@ pub struct AppMeta {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Shipped as files in the apps directory: read-only in the UI.
+    pub builtin: bool,
+    pub code: String,
+    /// Lua that checks `config` (with `assert`/`error`) before the app runs.
+    pub validate_code: String,
+    pub validate_enabled: bool,
     /// How often `fetch` runs; also the shortest refresh it asks of a device showing it.
     pub refresh_s: u64,
     pub settings: Vec<SettingField>,
     pub has_fetch: bool,
-    /// Why the app could not be loaded. Such an app is listed but cannot run.
+    /// Why the app's code could not be loaded. Such an app is listed but cannot run.
     pub error: Option<String>,
+    /// A built-in app's directory, where its image files are.
     #[serde(skip)]
-    pub dir: PathBuf,
+    pub dir: Option<PathBuf>,
 }
 
 impl AppMeta {
-    /// The stored settings with the app's defaults filled in.
-    pub fn settings_with_defaults(&self, stored: &serde_json::Value) -> serde_json::Value {
-        let mut out = serde_json::Map::new();
-        for f in &self.settings {
-            let v = stored.get(&f.key).filter(|v| !v.is_null()).unwrap_or(&f.default);
-            out.insert(f.key.clone(), v.clone());
+    /// The Lua a new instance starts from: each documented setting at its default.
+    pub fn config_template(&self) -> String {
+        if self.settings.is_empty() {
+            return "-- This app has no documented settings.\n".into();
         }
-        serde_json::Value::Object(out)
+        let mut out = String::new();
+        for f in &self.settings {
+            let mut about = if f.label.is_empty() { f.key.clone() } else { f.label.clone() };
+            if !f.options.is_empty() {
+                about += &format!(" (one of: {})", f.options.join(", "));
+            }
+            if !f.help.is_empty() {
+                about += &format!(". {}", f.help);
+            }
+            out += &format!("-- {about}\n");
+            if f.default.is_null() {
+                out += &format!("-- {} = \"\"\n", lua_key(&f.key));
+            } else {
+                out += &format!("{} = {}\n", lua_key(&f.key), lua_literal(&f.default));
+            }
+        }
+        out
     }
 }
 
-/// The installed apps, as last loaded from disk.
+/// The installed apps: the apps directory's, then the database's.
 pub struct Apps {
     dir: PathBuf,
     map: RwLock<BTreeMap<String, Arc<AppMeta>>>,
 }
 
 impl Apps {
-    pub fn load(dir: &Path) -> Self {
+    pub fn load(dir: &Path, stored: &[StoredApp]) -> Self {
         let apps = Self { dir: dir.to_path_buf(), map: RwLock::default() };
-        apps.reload();
+        apps.reload(stored);
         apps
     }
 
-    pub fn reload(&self) {
+    /// Reads the apps directory again and rebuilds every app.
+    pub fn reload(&self, stored: &[StoredApp]) {
         let mut map = BTreeMap::new();
         let entries = std::fs::read_dir(&self.dir).map(|rd| rd.flatten().collect::<Vec<_>>()).unwrap_or_else(|e| {
             tracing::warn!("cannot read the apps directory {}: {e}", self.dir.display());
@@ -84,15 +111,30 @@ impl Apps {
         for e in entries {
             let dir = e.path();
             if dir.join("app.lua").is_file() {
-                let meta = load_meta(&dir);
+                let meta = builtin_meta(&dir);
                 if let Some(err) = &meta.error {
                     tracing::warn!(app = meta.id, "{err}");
                 }
                 map.insert(meta.id.clone(), Arc::new(meta));
             }
         }
-        tracing::info!("{} apps loaded from {}", map.len(), self.dir.display());
+        let builtin = map.len();
+        for s in stored {
+            map.insert(s.id.clone(), Arc::new(stored_meta(s)));
+        }
+        tracing::info!("{builtin} built-in apps from {}, {} written here", self.dir.display(), stored.len());
         *self.map.write().unwrap() = map;
+    }
+
+    /// Rebuilds one written app after it was saved.
+    pub fn put(&self, s: &StoredApp) -> Arc<AppMeta> {
+        let meta = Arc::new(stored_meta(s));
+        self.map.write().unwrap().insert(s.id.clone(), meta.clone());
+        meta
+    }
+
+    pub fn remove(&self, id: &str) {
+        self.map.write().unwrap().remove(id);
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<AppMeta>> {
@@ -100,7 +142,24 @@ impl Apps {
     }
 
     pub fn list(&self) -> Vec<Arc<AppMeta>> {
-        self.map.read().unwrap().values().cloned().collect()
+        let mut list: Vec<_> = self.map.read().unwrap().values().cloned().collect();
+        list.sort_by_key(|a| (!a.builtin, a.name.to_lowercase()));
+        list
+    }
+
+    /// Whether another app (not `except`) already has this name, ignoring case.
+    pub fn name_taken(&self, name: &str, except: Option<&str>) -> bool {
+        let name = name.trim().to_lowercase();
+        self.map.read().unwrap().values().any(|a| a.name.to_lowercase() == name && Some(a.id.as_str()) != except)
+    }
+
+    /// "Clock" -> "Clock Copy 1" (or the first free number). "Clock Copy 1" -> "Clock Copy 2".
+    pub fn copy_name(&self, name: &str) -> String {
+        let base = match name.rsplit_once(" Copy ") {
+            Some((b, n)) if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() => b,
+            _ => name,
+        };
+        (1..).map(|n| format!("{base} Copy {n}")).find(|c| !self.name_taken(c, None)).unwrap()
     }
 }
 
@@ -130,8 +189,9 @@ for _, kind in ipairs { "column", "row", "box", "text", "image", "rule", "spacer
 end
 "#;
 
-/// A sandboxed Lua state for one app. `network`: whether `http` is available (fetch only).
-fn new_lua(app_dir: &Path, data_dir: &Path, network: bool, time: Duration) -> mlua::Result<Lua> {
+/// A sandboxed Lua state for one app (`label` names it in the log). `network`: whether `http`
+/// is available (fetch only).
+fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration) -> mlua::Result<Lua> {
     let lua = Lua::new_with(StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::OS, LuaOptions::default())?;
     lua.set_memory_limit(MEMORY_LIMIT)?;
     let start = Instant::now();
@@ -150,7 +210,7 @@ fn new_lua(app_dir: &Path, data_dir: &Path, network: bool, time: Duration) -> ml
         os.set(name, Value::Nil)?;
     }
 
-    let app = app_dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let app = label.to_string();
     let log = lua.create_function(move |_, args: mlua::Variadic<Value>| {
         let parts: Vec<String> = args.iter().map(|v| v.to_string().unwrap_or_else(|_| format!("{v:?}"))).collect();
         tracing::info!(app = app.as_str(), "{}", parts.join(" "));
@@ -265,31 +325,61 @@ fn to_lua(lua: &Lua, v: &serde_json::Value) -> mlua::Result<Value> {
     lua.to_value_with(v, mlua::serde::SerializeOptions::new().serialize_none_to_null(false).serialize_unit_to_null(false))
 }
 
-fn load_app(lua: &Lua, dir: &Path) -> mlua::Result<Table> {
-    let path = dir.join("app.lua");
-    let src = std::fs::read(&path).map_err(mlua::Error::external)?;
-    lua.load(src).set_name(format!("@{}/app.lua", dir.file_name().unwrap_or_default().to_string_lossy())).eval()
+
+/// Lua for a table key: bare when it can be, `["..."]` otherwise.
+pub fn lua_key(k: &str) -> String {
+    const KEYWORDS: &[&str] = &[
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not",
+        "or", "repeat", "return", "then", "true", "until", "while",
+    ];
+    let ident = k.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !KEYWORDS.contains(&k);
+    if ident { k.to_string() } else { format!("[{}]", lua_string(k)) }
 }
 
-fn load_meta(dir: &Path) -> AppMeta {
-    let id = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let mut meta = AppMeta {
-        id: id.clone(),
-        name: id.clone(),
-        description: String::new(),
-        refresh_s: 900,
-        settings: Vec::new(),
-        has_fetch: false,
-        error: None,
-        dir: dir.to_path_buf(),
-    };
-    let result = (|| -> mlua::Result<()> {
-        let lua = new_lua(dir, Path::new("."), false, RENDER_TIME)?;
-        let t = load_app(&lua, dir)?;
-        if let Some(n) = t.get::<Option<String>>("name")? {
-            meta.name = n;
+fn lua_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out += "\\\\",
+            '"' => out += "\\\"",
+            '\n' => out += "\\n",
+            '\r' => out += "\\r",
+            '\t' => out += "\\t",
+            c if (c as u32) < 0x20 => out += &format!("\\{}", c as u32),
+            c => out.push(c),
         }
-        meta.description = t.get::<Option<String>>("description")?.unwrap_or_default();
+    }
+    out.push('"');
+    out
+}
+
+/// A JSON value written as a Lua expression.
+pub fn lua_literal(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "nil".into(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => lua_string(s),
+        serde_json::Value::Array(a) => format!("{{ {} }}", a.iter().map(lua_literal).collect::<Vec<_>>().join(", ")),
+        serde_json::Value::Object(o) => {
+            format!("{{ {} }}", o.iter().map(|(k, v)| format!("{} = {}", lua_key(k), lua_literal(v))).collect::<Vec<_>>().join(", "))
+        }
+    }
+}
+
+fn read_meta(meta: &mut AppMeta) {
+    let result = (|| -> mlua::Result<()> {
+        let lua = new_lua(&meta.name, Path::new("."), false, RENDER_TIME)?;
+        lua.globals().set("config", lua.create_table()?)?;
+        let t = load_app(&lua, meta)?;
+        if meta.builtin {
+            if let Some(n) = t.get::<Option<String>>("name")? {
+                meta.name = n;
+            }
+            meta.description = t.get::<Option<String>>("description")?.unwrap_or_default();
+        }
         meta.refresh_s = match t.get::<Value>("refresh")? {
             Value::Nil => 900,
             Value::Integer(n) => n.max(60) as u64,
@@ -301,14 +391,64 @@ fn load_meta(dir: &Path) -> AppMeta {
         }
         meta.has_fetch = matches!(t.get::<Value>("fetch")?, Value::Function(_));
         if !matches!(t.get::<Value>("render")?, Value::Function(_)) {
-            return Err(mlua::Error::runtime("app.lua must return a table with a render function"));
+            return Err(mlua::Error::runtime("the code must return a table with a render function"));
         }
         Ok(())
     })();
     if let Err(e) = result {
         meta.error = Some(short_error(&e));
     }
+}
+
+fn builtin_meta(dir: &Path) -> AppMeta {
+    let id = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let read = |f: &str| std::fs::read_to_string(dir.join(f));
+    let validate = read("validate.lua").ok();
+    let mut meta = AppMeta {
+        id: id.clone(),
+        name: id,
+        description: String::new(),
+        builtin: true,
+        code: String::new(),
+        validate_enabled: validate.is_some(),
+        validate_code: validate.unwrap_or_default(),
+        refresh_s: 900,
+        settings: Vec::new(),
+        has_fetch: false,
+        error: None,
+        dir: Some(dir.to_path_buf()),
+    };
+    match read("app.lua") {
+        Ok(code) => {
+            meta.code = code;
+            read_meta(&mut meta);
+        }
+        Err(e) => meta.error = Some(format!("reading app.lua: {e}")),
+    }
     meta
+}
+
+pub fn stored_meta(s: &StoredApp) -> AppMeta {
+    let mut meta = AppMeta {
+        id: s.id.clone(),
+        name: s.name.clone(),
+        description: s.description.clone(),
+        builtin: false,
+        code: s.code.clone(),
+        validate_code: s.validate_code.clone(),
+        validate_enabled: s.validate_enabled,
+        refresh_s: 900,
+        settings: Vec::new(),
+        has_fetch: false,
+        error: None,
+        dir: None,
+    };
+    read_meta(&mut meta);
+    meta
+}
+
+fn load_app(lua: &Lua, app: &AppMeta) -> mlua::Result<Table> {
+    lua.load(&app.code).set_name("=app").eval()
 }
 
 /// "90s", "15m", "1h", "1d" -> seconds (at least 60).
@@ -329,43 +469,90 @@ fn parse_duration(s: &str) -> Option<u64> {
 fn short_error(e: &mlua::Error) -> String {
     // The message without the Rust-side traceback; Lua's own position is in the first line.
     let s = e.to_string();
-    let s = s.split("\nstack traceback:").next().unwrap_or(&s).trim();
+    let mut s = s.split("\nstack traceback:").next().unwrap_or(&s).trim();
+    // mlua prefixes each layer it passes through; once is noise enough.
+    while let Some(rest) = s.strip_prefix("runtime error: ").or_else(|| s.strip_prefix("syntax error: ")) {
+        s = rest;
+    }
     s.chars().take(600).collect()
 }
 
-/// Runs the app's `fetch(settings)`: what it returns is cached and handed to `render`.
-pub fn fetch(app: &AppMeta, settings: &serde_json::Value, data_dir: &Path) -> Result<serde_json::Value, String> {
+
+/// Runs an instance's config in `lua`, fills in the app's defaults and runs the app's config
+/// check. The result is also the global `config`, so the app's code can read it anywhere.
+fn prepare_config(lua: &Lua, app: &AppMeta, config_src: &str) -> mlua::Result<Table> {
+    let config = lua.create_table()?;
+    // Plain assignments (`units = "metric"`) land in the table; reads fall back to the globals,
+    // so the config can use string, math, os.date and so on.
+    let env = lua.create_table()?;
+    env.set("__index", lua.globals())?;
+    config.set_metatable(Some(env))?;
+    let returned: Value = lua.load(config_src).set_name("=config").set_environment(config.clone()).eval()?;
+    config.set_metatable(None)?;
+    // A config may also `return { ... }`.
+    if let Value::Table(t) = returned {
+        for pair in t.pairs::<Value, Value>() {
+            let (k, v) = pair?;
+            config.raw_set(k, v)?;
+        }
+    }
+    for f in &app.settings {
+        if config.raw_get::<Value>(f.key.as_str())?.is_nil() && !f.default.is_null() {
+            config.raw_set(f.key.as_str(), to_lua(lua, &f.default)?)?;
+        }
+    }
+    lua.globals().set("config", config.clone())?;
+    if app.validate_enabled && !app.validate_code.trim().is_empty() {
+        lua.load(&app.validate_code).set_name("=config check").exec()?;
+    }
+    Ok(config)
+}
+
+/// Whether an instance's config runs and passes the app's check.
+pub fn check_config(app: &AppMeta, config_src: &str) -> Result<(), String> {
+    (|| -> mlua::Result<()> {
+        let lua = new_lua(&app.name, Path::new("."), false, RENDER_TIME)?;
+        prepare_config(&lua, app, config_src).map(|_| ())
+    })()
+    .map_err(|e| short_error(&e))
+}
+
+/// Runs the app's `fetch(config)`: what it returns is cached and handed to `render`.
+pub fn fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_json::Value, String> {
     if let Some(e) = &app.error {
         return Err(e.clone());
     }
     (|| -> mlua::Result<serde_json::Value> {
-        let lua = new_lua(&app.dir, data_dir, true, FETCH_TIME)?;
-        let t = load_app(&lua, &app.dir)?;
+        let lua = new_lua(&app.name, data_dir, true, FETCH_TIME)?;
+        let config = prepare_config(&lua, app, config_src)?;
+        let t = load_app(&lua, app)?;
         let f: mlua::Function = t.get("fetch")?;
-        let out: Value = f.call(to_lua(&lua, settings)?)?;
+        let out: Value = f.call(config)?;
         lua.from_value(out)
     })()
     .map_err(|e| short_error(&e))
 }
 
-/// Runs the app's `render(data, slot, settings)` and turns the tree it returns into nodes.
-pub fn render(app: &AppMeta, settings: &serde_json::Value, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> Result<Node, String> {
+/// Runs the app's `render(data, slot, config)` and turns the tree it returns into nodes.
+pub fn render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> Result<Node, String> {
     if let Some(e) = &app.error {
         return Err(e.clone());
     }
     (|| -> mlua::Result<Node> {
-        let lua = new_lua(&app.dir, data_dir, false, RENDER_TIME)?;
-        let t = load_app(&lua, &app.dir)?;
+        let lua = new_lua(&app.name, data_dir, false, RENDER_TIME)?;
+        let config = prepare_config(&lua, app, config_src)?;
+        let t = load_app(&lua, app)?;
         let f: mlua::Function = t.get("render")?;
-        let tree: Value = f.call((to_lua(&lua, data)?, lua.to_value(&slot)?, to_lua(&lua, settings)?))?;
-        let ctx = NodeCtx { app_dir: &app.dir, data_dir };
+        let tree: Value = f.call((to_lua(&lua, data)?, lua.to_value(&slot)?, config))?;
+        let ctx = NodeCtx { app_dir: app.dir.as_deref(), data_dir };
         node_from_lua(&tree, &ctx).map_err(mlua::Error::runtime)
     })()
     .map_err(|e| short_error(&e))
 }
 
 struct NodeCtx<'a> {
-    app_dir: &'a Path,
+    /// Built-in apps can use image files from their directory; written apps only blobs.
+    app_dir: Option<&'a Path>,
     data_dir: &'a Path,
 }
 
@@ -467,11 +654,14 @@ fn load_image_bytes(src: &str, ctx: &NodeCtx) -> Result<Vec<u8>, String> {
         }
         ctx.data_dir.join("blobs").join(hash)
     } else {
+        let Some(app_dir) = ctx.app_dir else {
+            return Err(format!("{src}: apps written in tephra can only show images stored with blob()"));
+        };
         let rel = Path::new(src);
         if rel.is_absolute() || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
             return Err(format!("{src}: images must be files inside the app's directory"));
         }
-        ctx.app_dir.join(rel)
+        app_dir.join(rel)
     };
     std::fs::read(&path).map_err(|e| format!("{src}: {e}"))
 }
@@ -484,73 +674,142 @@ pub fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn app(src: &str) -> (tempdir::TempDir, AppMeta) {
-        let d = tempdir::TempDir::new();
-        let dir = d.0.join("demo");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.lua"), src).unwrap();
-        let meta = load_meta(&dir);
-        (d, meta)
+    fn stored(code: &str) -> AppMeta {
+        stored_meta(&StoredApp {
+            id: "t1".into(),
+            name: "Demo".into(),
+            description: String::new(),
+            code: code.into(),
+            validate_code: String::new(),
+            validate_enabled: false,
+        })
     }
 
-    /// A throwaway directory, removed when dropped.
-    mod tempdir {
-        pub struct TempDir(pub std::path::PathBuf);
-        impl TempDir {
-            pub fn new() -> Self {
-                let mut b = [0u8; 8];
-                getrandom::fill(&mut b).unwrap();
-                let p = std::env::temp_dir().join(format!("tephra-test-{}", super::hex(&b)));
-                std::fs::create_dir_all(&p).unwrap();
-                Self(p)
-            }
+    const DEMO: &str = r#"
+        return {
+          refresh = "15m",
+          settings = { { key = "who", label = "Who", default = "world" } },
+          render = function(data, slot, config)
+            return ui.column { ui.text { "hello " .. config.who }, nil, ui.text { slot.size } }
+          end,
+        }"#;
+
+    fn first_text(node: &Node) -> String {
+        match node {
+            Node::Text { text, .. } => text.clone(),
+            Node::Stack { children, .. } => first_text(&children[0]),
+            _ => String::new(),
         }
-        impl Drop for TempDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
+    }
+
+    fn slot() -> Slot {
+        Slot { w: 400, h: 300, size: "half" }
     }
 
     #[test]
-    fn loads_meta_and_renders_a_tree() {
-        let (d, meta) = app(r#"
-            return {
-              name = "Demo", refresh = "15m",
-              settings = { { key = "who", label = "Who", default = "world" } },
-              render = function(data, slot, settings)
-                return ui.column { ui.text { "hello " .. settings.who, style = "title" }, nil, ui.text { slot.size } }
-              end,
-            }"#);
+    fn reads_meta_and_renders_a_tree() {
+        let meta = stored(DEMO);
         assert_eq!(meta.error, None);
         assert_eq!((meta.name.as_str(), meta.refresh_s, meta.has_fetch), ("Demo", 900, false));
-        let settings = meta.settings_with_defaults(&serde_json::json!({}));
-        let node = render(&meta, &settings, &serde_json::Value::Null, Slot { w: 400, h: 300, size: "half" }, &d.0).unwrap();
-        let Node::Stack { children, .. } = node else { panic!() };
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        let Node::Stack { children, .. } = &node else { panic!() };
         assert_eq!(children.len(), 2, "the nil hole is skipped");
-        assert!(matches!(&children[0], Node::Text { text, .. } if text == "hello world"));
+        assert_eq!(first_text(&node), "hello world", "the default fills in");
+    }
+
+    #[test]
+    fn the_config_is_lua_run_first() {
+        let meta = stored(DEMO);
+        let node = render(&meta, r#"who = ("lua"):upper()"#, &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "hello LUA");
+        let node = render(&meta, r#"return { who = "table" }"#, &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "hello table");
+        let err = render(&meta, "who = ", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert!(err.contains("config"), "{err}");
+    }
+
+    #[test]
+    fn the_config_check_runs_before_the_app() {
+        let mut meta = stored(DEMO);
+        meta.validate_enabled = true;
+        meta.validate_code = r#"assert(#config.who <= 5, "who: at most 5 letters")"#.into();
+        assert_eq!(check_config(&meta, r#"who = "Ann""#), Ok(()));
+        let err = check_config(&meta, r#"who = "Bartholomew""#).unwrap_err();
+        assert!(err.contains("at most 5 letters"), "{err}");
+        // Switched off, the check doesn't run.
+        meta.validate_enabled = false;
+        assert_eq!(check_config(&meta, r#"who = "Bartholomew""#), Ok(()));
+    }
+
+    #[test]
+    fn the_template_round_trips() {
+        let meta = stored(DEMO);
+        let t = meta.config_template();
+        assert!(t.contains("who = \"world\""), "{t}");
+        assert_eq!(check_config(&meta, &t), Ok(()));
     }
 
     #[test]
     fn the_sandbox_has_no_files_or_processes() {
-        let (d, meta) = app(r#"return { render = function() return ui.text { tostring(io) .. tostring(os.execute) .. tostring(require) } end }"#);
-        let node = render(&meta, &serde_json::json!({}), &serde_json::Value::Null, Slot { w: 1, h: 1, size: "full" }, &d.0).unwrap();
-        assert!(matches!(node, Node::Text { text, .. } if text == "nilnilnil"));
+        let meta = stored(r#"return { render = function() return ui.text { tostring(io) .. tostring(os.execute) .. tostring(require) } end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "nilnilnil");
     }
 
     #[test]
     fn a_runaway_render_is_stopped() {
-        let (d, meta) = app(r#"return { render = function() while true do end end }"#);
-        let err = render(&meta, &serde_json::json!({}), &serde_json::Value::Null, Slot { w: 1, h: 1, size: "full" }, &d.0).unwrap_err();
+        let meta = stored(r#"return { render = function() while true do end end }"#);
+        let err = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
         assert!(err.contains("took longer"), "{err}");
     }
 
     #[test]
-    fn a_broken_app_reports_why() {
-        let (_d, meta) = app("return {");
-        assert!(meta.error.is_some());
-        let (_d, meta) = app("return { name = 'x' }");
-        assert!(meta.error.unwrap().contains("render"));
+    fn broken_code_reports_why() {
+        assert!(stored("return {").error.is_some());
+        assert!(stored("return { name = 'x' }").error.unwrap().contains("render"));
+    }
+
+    #[test]
+    fn written_apps_cannot_read_files() {
+        let meta = stored(r#"return { render = function() return ui.image { "../../etc/passwd" } end }"#);
+        let err = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert!(err.contains("blob()"), "{err}");
+    }
+
+    #[test]
+    fn copy_names_count_up() {
+        let apps = Apps::load(Path::new("/nonexistent"), &[]);
+        assert_eq!(apps.copy_name("Clock"), "Clock Copy 1");
+        apps.put(&StoredApp {
+            id: "a".into(),
+            name: "Clock Copy 1".into(),
+            description: String::new(),
+            code: DEMO.into(),
+            validate_code: String::new(),
+            validate_enabled: false,
+        });
+        assert_eq!(apps.copy_name("Clock"), "Clock Copy 2");
+        assert_eq!(apps.copy_name("Clock Copy 1"), "Clock Copy 2");
+        assert!(apps.name_taken("clock copy 1", None));
+        assert!(!apps.name_taken("Clock Copy 1", Some("a")));
+    }
+
+    #[test]
+    fn lua_literals() {
+        assert_eq!(lua_key("units"), "units");
+        assert_eq!(lua_key("end"), "[\"end\"]");
+        assert_eq!(lua_key("a-b"), "[\"a-b\"]");
+        assert_eq!(lua_literal(&serde_json::json!({"a": [1, "x\n"]})), "{ a = { 1, \"x\\n\" } }");
+    }
+
+    #[test]
+    fn json_round_trips_lists_and_nulls() {
+        let meta = stored(r#"return { render = function()
+            local v = json.decode('{"a":null,"b":[1,2]}')
+            return ui.text { json.encode({ 1, 2 }) .. tostring(v.a) .. #v.b }
+        end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "[1,2]nil2");
     }
 
     #[test]

@@ -1,0 +1,82 @@
+--- The table an app's code returns.
+--
+-- An app's code runs and returns one table describing the app. Only `render` is required.
+--
+--     return {
+--       refresh = "30m",
+--       settings = {
+--         { key = "location", label = "Location", default = "Seattle" },
+--       },
+--       fetch = function(config)
+--         local r = http.get("https://wttr.in/" .. http.urlencode(config.location) .. "?format=j1")
+--         return json.decode(r.body)
+--       end,
+--       render = function(data, slot, config)
+--         return ui.text { data.current_condition[1].temp_C .. "°", style = "huge" }
+--       end,
+--     }
+--
+-- @module app
+
+--- The app table.
+-- @table App
+-- @tfield[opt] string name Built-in apps only: the name shown in the UI. Apps written in tephra
+-- use their Name field instead.
+-- @tfield[opt] string description Built-in apps only, like `name`.
+-- @tfield[opt="15m"] string|number refresh How often `fetch` runs: seconds, or a duration such as
+-- `"90s"`, `"15m"`, `"1h"` or `"1d"` (at least a minute). A device showing the app refreshes at
+-- least this often, within the device's own limits.
+-- @tfield[opt] {Setting,...} settings What a config may set, with defaults.
+-- @tfield[opt] function fetch Gets the app's data: see @{fetch}.
+-- @tfield function render Draws the app: see @{render}.
+
+--- One setting an app documents.
+--
+-- Settings are documentation and defaults, not a form: a new instance's config is written from
+-- them, and anything a config leaves out takes its `default`.
+-- @table Setting
+-- @tfield string key The name a config assigns, such as `location`.
+-- @tfield[opt] string label A short description, written as a comment in new configs.
+-- @tfield[opt="string"] string type `"string"`, `"text"`, `"number"`, `"bool"` or `"choice"`.
+-- Documentation only.
+-- @tfield[opt] {string,...} options For a choice: the values allowed.
+-- @tfield[opt] any default The value when a config leaves this out.
+-- @tfield[opt] string help A longer explanation, also written into new configs.
+
+--- The space `render` draws into.
+-- @table Slot
+-- @tfield int w Width in pixels.
+-- @tfield int h Height in pixels.
+-- @tfield string size `"full"` (the whole screen), `"large"` (two thirds), `"half"` or `"small"`
+-- (a third, a quarter, or a sixth). Use it to show less in small slots.
+
+--- Gets the app's data. Optional.
+--
+-- Runs on the app's schedule (`refresh`), when an instance is saved, and on **Fetch now**. It may
+-- take up to 60 seconds and is the only place `http` is available. What it returns is stored
+-- and handed to `render`. If it raises an error, the previous data is kept and the error is
+-- shown in the UI.
+-- @tparam table config The instance's config.
+-- @return Plain data: tables, strings, numbers and booleans. Store binary data with `blob` first.
+-- @usage fetch = function(config)
+--   local r = http.get(config.url)
+--   if not r.ok then error("HTTP " .. r.status) end
+--   return { image = blob(r.body) }
+-- end
+function fetch(config) end
+
+--- Draws the app.
+--
+-- Runs for every image tephra makes for a device, and for every preview. It must finish within
+-- 2 seconds and has no network: do slow work in `fetch`.
+-- @param data What `fetch` last returned; nil before the first fetch, or for apps without one.
+-- @tparam Slot slot The space to draw into.
+-- @tparam table config The instance's config.
+-- @treturn ui.Node What to draw: build it with the @{ui} functions.
+-- @usage render = function(data, slot, config)
+--   return ui.column {
+--     ui.text { config.title, style = "title" },
+--     slot.size ~= "small" and ui.text { data.summary, wrap = true } or nil,
+--   }
+-- end
+function render(data, slot, config) end

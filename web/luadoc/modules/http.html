@@ -1,0 +1,266 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Functions">Functions</a></li>
+<li><a href="#Tables">Tables</a></li>
+</ul>
+
+
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><strong>http</strong></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+<h1>Module <code>http</code></h1>
+<p>Web requests.</p>
+<p> Only available in <code>fetch</code>.</p>
+
+<p> Requests time out after 20 seconds, and bodies over 16 MB fail. Redirects are followed.
+ An answer with an error status is returned, not raised: check <code>ok</code>.</p>
+
+
+<h2><a href="#Functions">Functions</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#get">get(url[, opts])</a></td>
+	<td class="summary">Sends a GET request.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#post">post(url, body[, opts])</a></td>
+	<td class="summary">Sends a POST request.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#urlencode">urlencode(s)</a></td>
+	<td class="summary">Escapes a string for use in a URL.</td>
+	</tr>
+</table>
+<h2><a href="#Tables">Tables</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#Response">Response</a></td>
+	<td class="summary">What a request returns.</td>
+	</tr>
+</table>
+
+<br/>
+<br/>
+
+
+    <h2 class="section-header "><a name="Functions"></a>Functions</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "get"></a>
+    <strong>get(url[, opts])</strong>
+    </dt>
+    <dd>
+    Sends a GET request.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">url</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">opts</span> Options:
+        <ul>
+        <li><span class="parameter">headers</span>
+            <span class="types"><span class="type">table</span></span>
+         Request headers, such as <code>{ [&quot;Accept&quot;] = &quot;application/json&quot; }</code>.
+         (<em>optional</em>)
+        </li>
+        </li></ul>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/http.html#Response">Response</a></span>
+
+
+
+    </ol>
+
+    <h3>Raises:</h3>
+    When the server can't be reached or the request takes too long.
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example"><span class="keyword">local</span> r = http.<span class="function-name">get</span>(<span class="string">"https://example.com/data.json"</span>)
+<span class="keyword">if</span> <span class="keyword">not</span> r.ok <span class="keyword">then</span> <span class="global">error</span>(<span class="string">"HTTP "</span> .. r.status) <span class="keyword">end</span>
+<span class="keyword">local</span> data = json.<span class="function-name">decode</span>(r.body)</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "post"></a>
+    <strong>post(url, body[, opts])</strong>
+    </dt>
+    <dd>
+    Sends a POST request.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">url</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">body</span>
+            <span class="types"><span class="type">string</span></span>
+         The request body.
+        </li>
+        <li><span class="parameter">opts</span>
+            <span class="types"><span class="type">table</span></span>
+         Options, as for <a href="../modules/http.html#get">get</a>.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><a class="type" href="../modules/http.html#Response">Response</a></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">http.<span class="function-name">post</span>(url, json.<span class="function-name">encode</span>({ q = <span class="string">"x"</span> }), { headers = { [<span class="string">"Content-Type"</span>] = <span class="string">"application/json"</span> } })</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "urlencode"></a>
+    <strong>urlencode(s)</strong>
+    </dt>
+    <dd>
+    Escapes a string for use in a URL.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">http.<span class="function-name">get</span>(<span class="string">"https://wttr.in/"</span> .. http.<span class="function-name">urlencode</span>(<span class="string">"New York"</span>) .. <span class="string">"?format=j1"</span>)</pre>
+    </ul>
+
+</dd>
+</dl>
+    <h2 class="section-header "><a name="Tables"></a>Tables</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "Response"></a>
+    <strong>Response</strong>
+    </dt>
+    <dd>
+    What a request returns.
+
+
+    <h3>Fields:</h3>
+    <ul>
+        <li><span class="parameter">status</span>
+            <span class="types"><span class="type">int</span></span>
+         The HTTP status, such as 200.
+        </li>
+        <li><span class="parameter">ok</span>
+            <span class="types"><span class="type">bool</span></span>
+         Whether the status is 2xx.
+        </li>
+        <li><span class="parameter">body</span>
+            <span class="types"><span class="type">string</span></span>
+         The body, as bytes: text, or binary data for <a href="../modules/globals.html#blob">globals.blob</a>.
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+</dl>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

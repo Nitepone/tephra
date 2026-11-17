@@ -37,23 +37,21 @@
   </div>
 </section>
 
-<!-- ---- Apps: what is installed, and each app's instances ---- -->
+<!-- ---- Apps: the apps and their instances, and their editors (apps.js) ---- -->
 <section id="page-apps" hidden>
-  <div class="page-head">
-    <h1>Apps</h1>
-    <span class="spacer"></span>
-    <button type="button" id="apps-reload" title="Read the apps directory again">Reload apps</button>
-  </div>
   <div id="apps-body"></div>
 </section>
 </main>
 
 <footer class="foot">
   <span id="foot-server"></span>
+  <a href="/docs/lua/" target="_blank" rel="noopener">Lua API reference</a>
   <label>Theme <select id="theme"><option value="">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
 </footer>
 
 <script src="/static/ui.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/apps.js"></script>
 <script src="/static/screens.js"></script>
 </body>
 </html>

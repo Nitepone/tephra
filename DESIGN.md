@@ -42,21 +42,30 @@ Crates: `axum`, `tokio`, `rusqlite` (bundled), `mlua` (Lua 5.4, vendored), `ab_g
 
 ## Apps
 
-An app is a directory under `apps/` with an `app.lua` that returns its name, refresh interval,
-settings schema, an optional `fetch(settings)` and a `render(data, slot, settings)`. The API apps are
-written against is in `apps/README.md`; `apps/clock`, `apps/weather` and `apps/image` are the examples.
+Built-in apps are directories under `apps/` with an `app.lua` (and optionally a `validate.lua`),
+read-only in the UI. Apps written, forked or imported in the UI are stored in the database (`apps`
+table). Both return the same kind of table: refresh interval, documented settings with defaults, an
+optional `fetch(config)` and a `render(data, slot, config)`. The API apps are written against is in
+the Lua API reference served at `/docs/lua/`: LDoc stubs and a guide in `luadoc/`, generated into `web/luadoc/` by
+`scripts/luadoc.sh` and embedded in the binary. `apps/clock`, `apps/weather` and `apps/image` are the examples.
 
+- **Instances and configs.** One app can be added several times. A slot holds an *instance*, and each
+  instance has its own **config**: Lua run before the app, whose assignments become `config`. Settings
+  the config leaves out take the app's defaults, and a new instance's config is written from them.
+- **Config check.** Optional per app: Lua run after the config and before the app. A config that fails
+  it can't be saved, and a slot whose config fails shows the message.
 - **Fetch and render are separate.** `fetch` does the network and slow work on the app's own schedule,
   and its result is cached in the database. `render` is fast and runs on every render, at the slot's
   actual size, so the preview re-renders instantly without touching the network. A failed fetch keeps
   the last good data, and the UI shows the error.
-- **Instances.** One app can be added several times with different settings, for example weather in two
-  places. A slot holds an *instance*.
 - **Sandbox.** Every call gets a fresh Lua state: tables, strings, math, utf8 and the time/date part of
   `os`. No `io`, `require`, `os.execute` or environment. `http` exists only in `fetch`. A 64 MB memory
-  limit and a time limit (60 s for fetch, 2 s for render) stop runaway scripts.
-- **Reload.** Apps load from disk at startup and again when you press **Reload apps** in the UI. A Lua
-  error shows up next to the app, and its slot draws an error box. It never breaks the rest of the screen.
+  limit and a time limit (60 s for fetch, 2 s for render) stop runaway scripts. Apps written in the UI
+  can only show images they stored with `blob()`, not files.
+- **Authoring.** The app page has name and description fields, a code editor (line numbers, Lua
+  colours), the optional config check, and **Try it**, which runs the unsaved code once. Any app can be
+  forked ("Name Copy N"; names are unique, ignoring case). Export and import use a file of
+  base64-encoded JSON.
 
 ### Layout tree
 

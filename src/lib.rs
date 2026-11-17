@@ -35,7 +35,7 @@ pub fn router(state: SharedState) -> Router {
 
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let db = Db::open(&cfg.db_path())?;
-    let apps = apps::Apps::load(&cfg.apps_dir);
+    let apps = apps::Apps::load(&cfg.apps_dir, &model::stored_apps(&db.conn())?);
     let listen = cfg.listen;
     let state = Arc::new(AppState { cfg, db, apps });
     tokio::spawn(display::scheduler(state.clone()));

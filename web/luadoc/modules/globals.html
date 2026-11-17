@@ -1,0 +1,218 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Functions">Functions</a></li>
+<li><a href="#Tables">Tables</a></li>
+</ul>
+
+
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><strong>globals</strong></li>
+</ul>
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+<h1>Module <code>globals</code></h1>
+<p>Everything else an app can use.</p>
+<p> Each config, check, fetch and render runs in a fresh Lua 5.4 state, so nothing carries over
+ between calls except what <code>fetch</code> returns. The standard <code>string</code>, <code>table</code>, <code>math</code> and <code>utf8</code>
+ libraries are there, and of <code>os</code> only <code>os.time</code>, <code>os.date</code>, <code>os.clock</code> and <code>os.difftime</code>
+ (in the server's timezone). There is no file access, <code>require</code>, <code>io</code> or process control.</p>
+
+<p> A call may use up to 64 MB of memory.</p>
+
+
+<h2><a href="#Functions">Functions</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#blob">blob(bytes)</a></td>
+	<td class="summary">Stores binary data, such as a downloaded image, and returns a reference to it.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#log">log(...)</a></td>
+	<td class="summary">Writes its arguments to the server's log.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#print">print(...)</a></td>
+	<td class="summary">The same as <a href="../modules/globals.html#log">log</a>.</td>
+	</tr>
+</table>
+<h2><a href="#Tables">Tables</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#config">config</a></td>
+	<td class="summary">The instance's config, also handed to <code>fetch</code> and <code>render</code>.</td>
+	</tr>
+</table>
+
+<br/>
+<br/>
+
+
+    <h2 class="section-header "><a name="Functions"></a>Functions</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "blob"></a>
+    <strong>blob(bytes)</strong>
+    </dt>
+    <dd>
+    Stores binary data, such as a downloaded image, and returns a reference to it. </p>
+
+<p> <code>fetch</code> can only return plain data, so binary data goes through here: store it, return the
+ reference, and pass that to <a href="../modules/ui.html#image">ui.image</a> in <code>render</code>.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">bytes</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+        A reference like <code>&quot;blob:3f2a…&quot;</code>.
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example"><span class="comment">-- in fetch
+</span><span class="keyword">return</span> { photo = <span class="function-name">blob</span>(http.<span class="function-name">get</span>(config.url).body) }
+<span class="comment">-- in render
+</span><span class="keyword">return</span> ui.<span class="function-name">image</span> { data.photo }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "log"></a>
+    <strong>log(...)</strong>
+    </dt>
+    <dd>
+    Writes its arguments to the server's log.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">...</span>
+         Values to write, separated by spaces.
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+    <dt>
+    <a name = "print"></a>
+    <strong>print(...)</strong>
+    </dt>
+    <dd>
+    The same as <a href="../modules/globals.html#log">log</a>.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">...</span>
+
+
+
+        </li>
+    </ul>
+
+
+
+
+
+</dd>
+</dl>
+    <h2 class="section-header "><a name="Tables"></a>Tables</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "config"></a>
+    <strong>config</strong>
+    </dt>
+    <dd>
+    The instance's config, also handed to <code>fetch</code> and <code>render</code>. </p>
+
+<p> It is made by running the instance's config code, whose assignments land in this table:</p>
+
+<pre><code> location = "Portland"
+ units = "imperial"
+</code></pre>
+
+<p> A config can also <code>return { location = &quot;Portland&quot; }</code>. Anything it leaves out takes its
+ default from the app's <code>settings</code>. If the app has a config check, the check runs next, with
+ this table already in place.
+
+
+
+
+
+
+
+</dd>
+</dl>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

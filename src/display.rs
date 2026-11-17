@@ -11,12 +11,13 @@ use anyhow::Context;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Unsaved edits the screen editor wants to see: a different layout, and settings not yet saved.
+/// Unsaved edits the screen editor wants to see: a different layout, and instance configs not
+/// yet saved.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Draft {
     pub screen: Option<ScreenConfig>,
     #[serde(default)]
-    pub settings: HashMap<i64, serde_json::Value>,
+    pub configs: HashMap<i64, String>,
 }
 
 /// The device's screen as a 1-bit PNG.
@@ -31,8 +32,8 @@ pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draf
         let mut instances = HashMap::new();
         for id in cfg.slots.iter().filter_map(|s| s.instance_id) {
             if let Some(mut i) = model::instance(&c, id)? {
-                if let Some(s) = draft.settings.get(&id) {
-                    i.settings = s.clone();
+                if let Some(c) = draft.configs.get(&id) {
+                    i.config = c.clone();
                 }
                 instances.insert(id, i);
             }
@@ -58,9 +59,8 @@ pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draf
                 let content = match state.apps.get(&inst.app) {
                     None => Err(format!("the app {:?} is not installed", inst.app)),
                     Some(app) => {
-                        let settings = app.settings_with_defaults(&inst.settings);
                         let slot = Slot { w: g.content.w, h: g.content.h, size: g.size };
-                        apps::render(&app, &settings, &inst.data, slot, &state.cfg.data_dir)
+                        apps::render(&app, &inst.config, &inst.data, slot, &state.cfg.data_dir)
                     }
                 };
                 SlotDraw { geom: *g, content: Some(content), title: inst.name.clone() }
@@ -138,9 +138,9 @@ pub async fn fetch_instance(state: &SharedState, id: i64) -> anyhow::Result<Resu
     if !app.has_fetch {
         return Ok(Ok(()));
     }
-    let settings = app.settings_with_defaults(&inst.settings);
+    let config = inst.config.clone();
     let data_dir = state.cfg.data_dir.clone();
-    let result = tokio::task::spawn_blocking(move || apps::fetch(&app, &settings, &data_dir)).await?;
+    let result = tokio::task::spawn_blocking(move || apps::fetch(&app, &config, &data_dir)).await?;
     let c = state.db.conn();
     if let Err(e) = &result {
         // Log a failure once, not on every retry.
@@ -198,4 +198,29 @@ fn prune_images(state: &SharedState) {
             let _ = std::fs::remove_file(e.path());
         }
     }
+}
+
+/// One app drawn alone on a panel of the given size, for the app editor: its config is run,
+/// then (if the app has one) its fetch, then its render. Nothing is stored.
+pub async fn try_app(state: &SharedState, app: apps::AppMeta, config: String, w: u32, h: u32, size: &'static str) -> anyhow::Result<Vec<u8>> {
+    let data_dir = state.cfg.data_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let p = match size {
+            "full" => screen::preset("full"),
+            "large" => screen::preset("two-thirds"),
+            "half" => screen::preset("halves"),
+            _ => screen::preset("quadrants"),
+        };
+        let title_bars: Vec<bool> = (0..p.slots.len()).map(|i| i == 0).collect();
+        let geoms = screen::geometry(p, w, h, &title_bars);
+        let g = geoms[0];
+        let content = (|| {
+            let data = if app.has_fetch { apps::fetch(&app, &config, &data_dir)? } else { serde_json::Value::Null };
+            apps::render(&app, &config, &data, Slot { w: g.content.w, h: g.content.h, size: g.size }, &data_dir)
+        })();
+        let mut slots = vec![SlotDraw { geom: g, content: Some(content), title: app.name.clone() }];
+        slots.extend(geoms[1..].iter().map(|g| SlotDraw { geom: *g, content: None, title: String::new() }));
+        screen::compose(w, h, p.slots.len() > 1, &slots).to_png()
+    })
+    .await?
 }

@@ -59,7 +59,8 @@ the Lua API reference served at `/docs/lua/`: LDoc stubs and a guide in `luadoc/
   actual size, so the preview re-renders instantly without touching the network. A failed fetch keeps
   the last good data, and the UI shows the error.
 - **Sandbox.** Every call gets a fresh Lua state: tables, strings, math, utf8 and the time/date part of
-  `os`. No `io`, `require`, `os.execute` or environment. `http` exists only in `fetch`. A 64 MB memory
+  `os`, plus tephra's `time` library (chrono and chrono-tz: parsing, formatting and calendar
+  arithmetic in any IANA zone) and a few string and table helpers. No `io`, `require`, `os.execute` or environment. `http` exists only in `fetch`. A 64 MB memory
   limit and a time limit (60 s for fetch, 2 s for render) stop runaway scripts. Apps written in the UI
   can only show images they stored with `blob()`, not files.
 - **Authoring.** The app page has name and description fields, a code editor (line numbers, Lua
@@ -74,7 +75,7 @@ A small, flexbox-ish vocabulary is enough:
 | Node | Notes |
 |---|---|
 | `column`, `row` | `gap`, `align`, `justify`; children may set `grow`. |
-| `text` | `style` = small/body/label/title/large/huge (fixed type scale) or `size`, `wrap`, `align`, `max_lines`. |
+| `text` | `style` = small/body/label/title/large/huge (fixed type scale) or `size`, `font` (sans, serif, mono, overpass), `bold`, `italic`, `wrap`, `align`, `max_lines`, `fit = "shrink"` with `min_size`, `smooth`. `ui.measure` sizes a node before drawing. |
 | `image` | App asset or fetched bytes (`blob`). Dithered to 1 bit, `fit` = contain/cover. |
 | `rule` | Horizontal or vertical line. |
 | `box` | `border`, `padding`, `invert` (white on black). |
@@ -83,6 +84,14 @@ A small, flexbox-ish vocabulary is enough:
 
 The renderer owns the fonts and the type scale, so all apps look consistent on the panel.
 Text is drawn with a threshold, not dithered, so it stays crisp.
+
+### Developer API
+
+`/api/v1/dev/fetch` and `/api/v1/dev/render` run app code that isn't saved, for scripts and coding
+agents: the PNG (one size or a sheet of all four), a per-node layout report flagging cut-off text
+and overflow, timings against the limits, and failures with chunk, line and traceback. They run any
+Lua with network access, so they answer only loopback clients. Documented in the Lua reference
+("Testing from the command line", `luadoc/dev-api.md`).
 
 ## Screens and layouts
 

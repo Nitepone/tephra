@@ -4,8 +4,10 @@ pub mod apps;
 pub mod config;
 pub mod control_api;
 pub mod db;
+pub mod dev;
 pub mod device_api;
 pub mod display;
+pub mod luatime;
 pub mod model;
 pub mod render;
 pub mod screen;
@@ -41,7 +43,8 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     tokio::spawn(display::scheduler(state.clone()));
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("listening on http://{listen}");
-    axum::serve(listener, router(state))
+    // The peer address lets the developer API answer only this machine.
+    axum::serve(listener, router(state).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

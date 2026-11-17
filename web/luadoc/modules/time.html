@@ -1,0 +1,501 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#Functions">Functions</a></li>
+</ul>
+
+
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><strong>time</strong></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+  <li><a href="../topics/dev-api.md.html">dev-api</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+<h1>Module <code>time</code></h1>
+<p>Dates, times and time zones.</p>
+<p>
+
+
+<p> Times are numbers: seconds since 1970-01-01 UTC, the same as <code>os.time()</code> returns. Store and
+ compare them as numbers, and turn them into text only to draw them, with <a href="../modules/time.html#format">format</a>.</p>
+
+<p> Every function that takes a zone argument accepts:</p>
+
+<ul>
+    <li>an IANA zone name, such as <code>&quot;Europe/London&quot;</code>, <code>&quot;America/New_York&quot;</code> or <code>&quot;Asia/Dubai&quot;</code>,
+    which follows that place's daylight saving time;</li>
+    <li><code>&quot;UTC&quot;</code>;</li>
+    <li>a number of hours from UTC, such as <code>-5</code> or <code>5.5</code>, which never changes;</li>
+    <li><code>&quot;local&quot;</code>: the server's zone (tephra's <code>timezone</code> setting, else the system's).</li>
+</ul>
+
+<p> Left out, the zone is <code>&quot;local&quot;</code>. Apps whose users may be elsewhere can take a zone in their
+ config and pass it along:</p>
+
+
+<pre>
+settings = { { key = <span class="string">"zone"</span>, label = <span class="string">"Time zone"</span>, default = <span class="string">"local"</span> } },
+...
+ui.<span class="function-name">text</span> { time.<span class="function-name">format</span>(data.start, <span class="string">"%a %-d %b %H:%M"</span>, config.zone) }
+</pre>
+
+</p>
+
+
+<h2><a href="#Functions">Functions</a></h2>
+<table class="function_list">
+	<tr>
+	<td class="name" nowrap><a href="#now">now()</a></td>
+	<td class="summary">The current time.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#zone">zone()</a></td>
+	<td class="summary">The server's zone name, such as <code>&quot;America/Los_Angeles&quot;</code>.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#parse">parse(s[, zone="local"])</a></td>
+	<td class="summary">Reads a date or time.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#format">format(t, fmt[, zone="local"])</a></td>
+	<td class="summary">Writes a time as text, in a zone.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#parts">parts(t[, zone="local"])</a></td>
+	<td class="summary">A time's calendar fields, in a zone.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#make">make(parts[, zone="local"])</a></td>
+	<td class="summary">The time at a wall-clock date and time in a zone.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#start_of_day">start_of_day(t[, zone="local"])</a></td>
+	<td class="summary">The start (midnight) of the day a time falls on, in a zone.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#add">add(t, amount[, zone="local"])</a></td>
+	<td class="summary">A time plus (or minus) an amount.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#relative">relative(t[, now])</a></td>
+	<td class="summary">How far a time is from now, in words: "now", "in 12 min", "3 h ago", "in 2 days",
+ "in 3 weeks".</td>
+	</tr>
+</table>
+
+<br/>
+<br/>
+
+
+    <h2 class="section-header "><a name="Functions"></a>Functions</h2>
+
+    <dl class="function">
+    <dt>
+    <a name = "now"></a>
+    <strong>now()</strong>
+    </dt>
+    <dd>
+    The current time.
+
+
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">int</span></span>
+        Seconds since 1970-01-01 UTC.
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "zone"></a>
+    <strong>zone()</strong>
+    </dt>
+    <dd>
+    The server's zone name, such as <code>&quot;America/Los_Angeles&quot;</code>.
+
+
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "parse"></a>
+    <strong>parse(s[, zone="local"])</strong>
+    </dt>
+    <dd>
+    Reads a date or time. </p>
+
+<p> Understands ISO 8601 / RFC 3339 (<code>&quot;2026-12-06T13:00:00Z&quot;</code>, <code>&quot;2026-12-06T17:00:00+04:00&quot;</code>,
+ <code>&quot;2026-12-06 13:00&quot;</code>, <code>&quot;2026-12-06&quot;</code>) and RFC 2822 (<code>&quot;Sun, 06 Dec 2026 13:00:00 GMT&quot;</code>).
+ A text with its own offset (<code>Z</code>, <code>+04:00</code>) means exactly that moment; one without is read in
+ the zone given. A date alone is midnight.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">zone</span>
+         For text without an offset.
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+        <li>
+           <span class="types">optional <span class="type">int</span></span>
+        The time, or nil if <code>s</code> can't be read...</li>
+        <li>
+           <span class="types">optional <span class="type">string</span></span>
+        ...and why.</li>
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <li><pre class="example"><span class="comment">-- Jolpica gives the date and the time apart:
+</span> <span class="keyword">local</span> t = time.<span class="function-name">parse</span>(race.date .. <span class="string">"T"</span> .. race.time)</pre></li>
+        <li><pre class="example"><span class="keyword">local</span> t, err = time.<span class="function-name">parse</span>(config.start)
+ <span class="keyword">if</span> <span class="keyword">not</span> t <span class="keyword">then</span> <span class="global">error</span>(<span class="string">"start: "</span> .. err) <span class="keyword">end</span></pre></li>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "format"></a>
+    <strong>format(t, fmt[, zone="local"])</strong>
+    </dt>
+    <dd>
+    Writes a time as text, in a zone. </p>
+
+<p> The format is strftime's, such as <code>%Y-%m-%d</code>, <code>%H:%M</code>, <code>%a</code> (Sun), <code>%A</code> (Sunday), <code>%b</code> (Dec),
+ <code>%B</code> (December), <code>%p</code> (AM/PM) and <code>%Z</code> (the zone's abbreviation, such as BST). A <code>-</code> after the
+ <code>%</code> drops the leading zero: <code>%-d</code> gives "6" rather than "06", <code>%-I</code> gives "8" rather than "08".
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">fmt</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">zone</span>
+
+
+
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+
+
+
+    </ol>
+
+    <h3>Raises:</h3>
+    When the format has an unknown <code>%</code> code, or the zone is unknown.
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <li><pre class="example">time.<span class="function-name">format</span>(t, <span class="string">"%a %-d %b, %H:%M"</span>, <span class="string">"Asia/Dubai"</span>)   <span class="comment">--&gt; "Sun 6 Dec, 17:00"</span></pre></li>
+        <li><pre class="example">time.<span class="function-name">format</span>(t, <span class="string">"%-I:%M %p"</span>, <span class="string">"America/New_York"</span>)    <span class="comment">--&gt; "8:00 AM"</span></pre></li>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "parts"></a>
+    <strong>parts(t[, zone="local"])</strong>
+    </dt>
+    <dd>
+    A time's calendar fields, in a zone.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">zone</span>
+
+
+
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+        <code>year</code>, <code>month</code> (1-12), <code>day</code>, <code>hour</code>, <code>min</code>, <code>sec</code>, <code>weekday</code> (1 Monday to 7
+ Sunday), <code>yday</code> (1-366), <code>offset</code> (seconds east of UTC) and <a href="../modules/time.html#zone">zone</a> (the abbreviation).
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "make"></a>
+    <strong>make(parts[, zone="local"])</strong>
+    </dt>
+    <dd>
+    The time at a wall-clock date and time in a zone. </p>
+
+<p> A reading in the hour skipped when clocks go forward means the same reading an hour later
+ (01:30 becomes 02:30); one in the hour repeated when they go back means the first of the two.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">parts</span>
+            <span class="types"><span class="type">table</span></span>
+         <code>year</code>, <code>month</code>, <code>day</code>, and optionally <code>hour</code>, <code>min</code>, <code>sec</code> (default 0).
+        </li>
+        <li><span class="parameter">zone</span>
+
+
+
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">int</span></span>
+
+
+
+    </ol>
+
+    <h3>Raises:</h3>
+    When the date doesn't exist, such as 31 February.
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">time.<span class="function-name">make</span>({ year = <span class="number">2026</span>, month = <span class="number">12</span>, day = <span class="number">6</span>, hour = <span class="number">17</span> }, <span class="string">"Asia/Dubai"</span>)</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "start_of_day"></a>
+    <strong>start_of_day(t[, zone="local"])</strong>
+    </dt>
+    <dd>
+    The start (midnight) of the day a time falls on, in a zone. </p>
+
+<p> Two times are on the same day when their <a href="../modules/time.html#start_of_day">start_of_day</a> is equal.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">zone</span>
+
+
+
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">int</span></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example"><span class="keyword">local</span> today = time.<span class="function-name">start_of_day</span>(time.<span class="function-name">now</span>(), config.zone)
+ <span class="keyword">local</span> tomorrow = time.<span class="function-name">add</span>(today, { days = <span class="number">1</span> }, config.zone)</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "add"></a>
+    <strong>add(t, amount[, zone="local"])</strong>
+    </dt>
+    <dd>
+    A time plus (or minus) an amount. </p>
+
+<p> <code>years</code>, <code>months</code>, <code>weeks</code> and <code>days</code> step the calendar in the zone, so a day later is the
+ same time of day even across a change of clocks, and a month after 31 January is the last
+ day of February. <code>hours</code>, <code>minutes</code> and <code>seconds</code> are exact. Negative amounts go back.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">amount</span>
+            <span class="types"><span class="type">table</span></span>
+         Any of <code>years</code>, <code>months</code>, <code>weeks</code>, <code>days</code>, <code>hours</code>, <code>minutes</code>, <code>seconds</code>.
+        </li>
+        <li><span class="parameter">zone</span>
+         For the calendar steps.
+         (<em>default</em> "local")
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">int</span></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example">time.<span class="function-name">add</span>(t, { days = <span class="number">1</span>, hours = <span class="number">2</span> })</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "relative"></a>
+    <strong>relative(t[, now])</strong>
+    </dt>
+    <dd>
+    How far a time is from now, in words: "now", "in 12 min", "3 h ago", "in 2 days",
+ "in 3 weeks".
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">now</span>
+            <span class="types"><span class="type">integer</span></span>
+         Compare with this instead of the current time.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+</dl>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 17:29:59 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

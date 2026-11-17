@@ -1,6 +1,9 @@
-Noto Sans (NotoSans-Regular.ttf, NotoSans-Bold.ttf)
-Copyright 2010, 2012-2020 Google Inc. / Google LLC.
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
+Fonts bundled with tephra, all under the SIL Open Font License, Version 1.1 (below):
+
+- Noto Sans (NotoSans-Regular.ttf, NotoSans-Bold.ttf), Noto Serif (NotoSerif-Regular.ttf,
+  NotoSerif-Bold.ttf, NotoSerif-Italic.ttf) and Noto Sans Mono (NotoSansMono-Regular.ttf,
+  NotoSansMono-Bold.ttf): Copyright 2010, 2012-2020 Google Inc. / Google LLC.
+- Overpass (overpass-regular.otf, overpass-bold.otf): Copyright 2016 Red Hat, Inc.
 
 PREAMBLE
 

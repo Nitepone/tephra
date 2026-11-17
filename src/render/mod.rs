@@ -11,7 +11,7 @@ use anyhow::Context;
 pub const WHITE: u8 = 255;
 pub const BLACK: u8 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -40,12 +40,16 @@ pub struct Canvas {
     pub h: i32,
     px: Vec<u8>,
     clip: Rect,
+    /// When set, every node drawn adds where it went and what didn't fit (see `layout::LayoutEntry`).
+    pub report: Option<Vec<layout::LayoutEntry>>,
+    /// The child indexes leading to the node being drawn, for the report.
+    pub(crate) path: Vec<usize>,
 }
 
 impl Canvas {
     pub fn new(w: u32, h: u32) -> Self {
         let (w, h) = (w as i32, h as i32);
-        Self { w, h, px: vec![WHITE; (w * h) as usize], clip: Rect::new(0, 0, w, h) }
+        Self { w, h, px: vec![WHITE; (w * h) as usize], clip: Rect::new(0, 0, w, h), report: None, path: Vec::new() }
     }
 
     /// Restricts drawing to `r` (within the current clip) until the returned clip is restored.
@@ -106,6 +110,15 @@ impl Canvas {
                         err[nj * iw + ni as usize] += e;
                     }
                 }
+            }
+        }
+    }
+
+    /// Copies `other` onto this canvas with its top left at (x, y).
+    pub fn blit(&mut self, other: &Canvas, x: i32, y: i32) {
+        for j in 0..other.h {
+            for i in 0..other.w {
+                self.set(x + i, y + j, other.get(i, j));
             }
         }
     }

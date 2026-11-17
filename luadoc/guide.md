@@ -76,7 +76,18 @@ or `"small"` (see @{app.Slot}). Show less in small slots:
       }
     end,
 
+Measure instead of guessing what fits: @{ui.measure} gives the size text (or any node) will
+take before drawing it, and `fit = "shrink"` on @{ui.text} picks the largest size that fits.
 The panel is black and white. Text is drawn crisp; images are dithered.
+
+## Dates and times
+
+Keep times as numbers and use @{time} to read and write them. It knows time zones and daylight
+saving time, so an app can show a race start in its viewer's zone:
+
+    local start = time.parse(race.date .. "T" .. race.time)  -- "2026-12-06T13:00:00Z"
+    ui.text { time.format(start, "%a %-d %b, %H:%M", config.zone) }  -- "Sun 6 Dec, 17:00"
+    ui.text { time.relative(start) }  -- "in 3 days"
 
 ## Trying it
 

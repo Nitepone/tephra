@@ -8,8 +8,11 @@ ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10.4"
 clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.4.3"
+iana-time-zone = "0.1.65"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 include_dir = "0.7.4"
 mlua = { version = "0.12.2", features = ["lua54", "vendored", "serialize"] }

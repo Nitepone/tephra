@@ -1,29 +1,80 @@
-//! Text: the two bundled faces (Noto Sans Regular and Bold, OFL), measuring, wrapping and drawing.
+//! Text: the bundled typefaces (all OFL, see assets/fonts/OFL.txt), measuring, wrapping and
+//! drawing. A character a face doesn't have is drawn from Noto Sans instead.
 
 use super::Canvas;
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont, point};
 use std::sync::OnceLock;
 
-static REGULAR: &[u8] = include_bytes!("../../assets/fonts/NotoSans-Regular.ttf");
-static BOLD: &[u8] = include_bytes!("../../assets/fonts/NotoSans-Bold.ttf");
-
-struct Faces {
-    regular: FontRef<'static>,
-    bold: FontRef<'static>,
+/// A typeface family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Face {
+    #[default]
+    Sans,
+    Serif,
+    Mono,
+    Overpass,
 }
 
-fn faces() -> &'static Faces {
-    static F: OnceLock<Faces> = OnceLock::new();
-    F.get_or_init(|| Faces {
-        regular: FontRef::try_from_slice(REGULAR).expect("bundled font"),
-        bold: FontRef::try_from_slice(BOLD).expect("bundled font"),
-    })
+impl Face {
+    pub const NAMES: &'static str = "sans, serif, mono or overpass";
+
+    pub fn parse(s: &str) -> Option<Face> {
+        Some(match s {
+            "sans" => Face::Sans,
+            "serif" => Face::Serif,
+            "mono" => Face::Mono,
+            "overpass" => Face::Overpass,
+            _ => return None,
+        })
+    }
+}
+
+/// (family, bold, italic, file). Missing combinations fall back: see `font`.
+const FILES: &[(Face, bool, bool, &[u8])] = &[
+    (Face::Sans, false, false, include_bytes!("../../assets/fonts/NotoSans-Regular.ttf")),
+    (Face::Sans, true, false, include_bytes!("../../assets/fonts/NotoSans-Bold.ttf")),
+    (Face::Serif, false, false, include_bytes!("../../assets/fonts/NotoSerif-Regular.ttf")),
+    (Face::Serif, true, false, include_bytes!("../../assets/fonts/NotoSerif-Bold.ttf")),
+    (Face::Serif, false, true, include_bytes!("../../assets/fonts/NotoSerif-Italic.ttf")),
+    (Face::Mono, false, false, include_bytes!("../../assets/fonts/NotoSansMono-Regular.ttf")),
+    (Face::Mono, true, false, include_bytes!("../../assets/fonts/NotoSansMono-Bold.ttf")),
+    (Face::Overpass, false, false, include_bytes!("../../assets/fonts/overpass-regular.otf")),
+    (Face::Overpass, true, false, include_bytes!("../../assets/fonts/overpass-bold.otf")),
+];
+
+fn loaded() -> &'static Vec<(Face, bool, bool, FontRef<'static>)> {
+    static F: OnceLock<Vec<(Face, bool, bool, FontRef<'static>)>> = OnceLock::new();
+    F.get_or_init(|| FILES.iter().map(|(f, b, i, data)| (*f, *b, *i, FontRef::try_from_slice(data).expect("bundled font"))).collect())
+}
+
+/// The closest file: the exact style, then without italic, then without bold, then Noto Sans.
+fn font(face: Face, bold: bool, italic: bool) -> &'static FontRef<'static> {
+    let all = loaded();
+    let find = |f: Face, b: bool, i: bool| all.iter().find(|(ff, bb, ii, _)| *ff == f && *bb == b && *ii == i).map(|t| &t.3);
+    find(face, bold, italic)
+        .or_else(|| find(face, bold, false))
+        .or_else(|| find(face, false, italic))
+        .or_else(|| find(face, false, false))
+        .or_else(|| find(Face::Sans, bold, false))
+        .expect("Noto Sans is bundled")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
+    /// The line's height in pixels (ascent plus descent).
     pub size: f32,
     pub bold: bool,
+    pub italic: bool,
+    pub face: Face,
+    /// Dither the edges instead of thresholding them: softer curves for large text.
+    pub smooth: bool,
+}
+
+/// One glyph placed on a line.
+struct Placed {
+    font: &'static FontRef<'static>,
+    id: GlyphId,
+    x: f32,
 }
 
 impl TextStyle {
@@ -38,41 +89,66 @@ impl TextStyle {
             "huge" => (96.0, true),
             _ => return None,
         };
-        Some(Self { size, bold })
+        Some(Self { size, bold, italic: false, face: Face::Sans, smooth: false })
     }
 
-    fn font(&self) -> &'static FontRef<'static> {
-        let f = faces();
-        if self.bold { &f.bold } else { &f.regular }
+    fn primary(&self) -> &'static FontRef<'static> {
+        font(self.face, self.bold, self.italic)
+    }
+
+    fn scale(&self) -> PxScale {
+        PxScale::from(self.size)
     }
 
     pub fn ascent(&self) -> f32 {
-        self.font().as_scaled(PxScale::from(self.size)).ascent()
+        self.primary().as_scaled(self.scale()).ascent()
     }
 
     pub fn line_height(&self) -> f32 {
-        let s = self.font().as_scaled(PxScale::from(self.size));
+        let s = self.primary().as_scaled(self.scale());
         (s.ascent() - s.descent() + s.line_gap()).ceil()
     }
 
-    pub fn width(&self, text: &str) -> f32 {
-        let s = self.font().as_scaled(PxScale::from(self.size));
-        let mut w = 0.0;
-        let mut prev = None;
+    /// Places each character, from the face or (if it lacks the character) Noto Sans.
+    fn place(&self, text: &str) -> (Vec<Placed>, f32) {
+        let primary = self.primary();
+        let fallback = font(Face::Sans, self.bold, false);
+        let mut out = Vec::with_capacity(text.len());
+        let mut pen = 0.0;
+        let mut prev: Option<(&FontRef, GlyphId)> = None;
         for c in text.chars() {
-            let id = s.glyph_id(c);
-            if let Some(p) = prev {
-                w += s.kern(p, id);
+            let mut f = primary;
+            let mut id = f.glyph_id(c);
+            if id.0 == 0 && !c.is_whitespace() {
+                f = fallback;
+                id = f.glyph_id(c);
             }
-            w += s.h_advance(id);
-            prev = Some(id);
+            let s = f.as_scaled(self.scale());
+            if let Some((pf, pid)) = prev
+                && std::ptr::eq(pf, f)
+            {
+                pen += s.kern(pid, id);
+            }
+            out.push(Placed { font: f, id, x: pen });
+            pen += s.h_advance(id);
+            prev = Some((f, id));
         }
-        w
+        (out, pen)
+    }
+
+    pub fn width(&self, text: &str) -> f32 {
+        self.place(text).1
     }
 
     /// Breaks `text` into lines no wider than `max_w`: at newlines, then between words, and
     /// inside a word only when the word alone is too wide.
     pub fn wrap(&self, text: &str, max_w: f32) -> Vec<String> {
+        self.wrap_reporting(text, max_w).0
+    }
+
+    /// `wrap`, and whether a word had to be split because it was wider than the line.
+    pub fn wrap_reporting(&self, text: &str, max_w: f32) -> (Vec<String>, bool) {
+        let mut split_word = false;
         let mut lines = Vec::new();
         for para in text.split('\n') {
             let mut line = String::new();
@@ -89,6 +165,7 @@ impl TextStyle {
                 for c in word.chars() {
                     line.push(c);
                     if self.width(&line) > max_w && line.chars().count() > 1 {
+                        split_word = true;
                         line.pop();
                         lines.push(std::mem::take(&mut line));
                         line.push(c);
@@ -97,7 +174,7 @@ impl TextStyle {
             }
             lines.push(line);
         }
-        lines
+        (lines, split_word)
     }
 
     /// `text` cut to fit `max_w`, ending in an ellipsis when it was cut.
@@ -116,29 +193,68 @@ impl TextStyle {
         String::new()
     }
 
-    /// Draws one line with its top at `y`. Glyph coverage is thresholded, so text stays crisp.
+    /// Draws one line with its top at `y`. Glyph coverage is thresholded, so text stays crisp;
+    /// with `smooth`, it is dithered instead.
     pub fn draw(&self, c: &mut Canvas, x: f32, y: f32, text: &str, ink: u8) {
-        let font = self.font();
-        let s = font.as_scaled(PxScale::from(self.size));
-        let baseline = y + s.ascent();
-        let mut pen = x;
-        let mut prev = None;
-        for ch in text.chars() {
-            let id = s.glyph_id(ch);
-            if let Some(p) = prev {
-                pen += s.kern(p, id);
-            }
-            let glyph = id.with_scale_and_position(PxScale::from(self.size), point(pen, baseline));
-            if let Some(outline) = font.outline_glyph(glyph) {
-                let b = outline.px_bounds();
-                outline.draw(|gx, gy, cov| {
+        let baseline = y + self.ascent();
+        let outlines: Vec<_> = self
+            .place(text)
+            .0
+            .into_iter()
+            .filter_map(|p| p.font.outline_glyph(p.id.with_scale_and_position(self.scale(), point(x + p.x, baseline))))
+            .collect();
+        if !self.smooth {
+            for o in &outlines {
+                let b = o.px_bounds();
+                o.draw(|gx, gy, cov| {
                     if cov >= 0.45 {
                         c.set(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, ink);
                     }
                 });
             }
-            pen += s.h_advance(id);
-            prev = Some(id);
+            return;
+        }
+        // Gather the line's coverage, then diffuse it (Atkinson, like images).
+        let Some((x0, y0, x1, y1)) = outlines.iter().map(|o| o.px_bounds()).fold(None, |acc: Option<(f32, f32, f32, f32)>, b| {
+            Some(match acc {
+                None => (b.min.x, b.min.y, b.max.x, b.max.y),
+                Some((a, bb, cc, d)) => (a.min(b.min.x), bb.min(b.min.y), cc.max(b.max.x), d.max(b.max.y)),
+            })
+        }) else {
+            return;
+        };
+        let (x0, y0) = (x0.floor() as i32, y0.floor() as i32);
+        let (w, h) = ((x1.ceil() as i32 - x0).max(1) as usize, (y1.ceil() as i32 - y0).max(1) as usize);
+        let mut cov = vec![0f32; w * h];
+        for o in &outlines {
+            let b = o.px_bounds();
+            let (ox, oy) = (b.min.x as i32 - x0, b.min.y as i32 - y0);
+            o.draw(|gx, gy, v| {
+                let (px, py) = (ox + gx as i32, oy + gy as i32);
+                if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                    let cell = &mut cov[py as usize * w + px as usize];
+                    *cell = (*cell + v).min(1.0);
+                }
+            });
+        }
+        for j in 0..h {
+            for i in 0..w {
+                let old = cov[j * w + i];
+                if old <= 0.0 {
+                    continue;
+                }
+                let on = old >= 0.5;
+                if on {
+                    c.set(x0 + i as i32, y0 + j as i32, ink);
+                }
+                let e = (old - if on { 1.0 } else { 0.0 }) / 8.0;
+                for (di, dj) in [(1isize, 0usize), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)] {
+                    let (ni, nj) = (i as isize + di, j + dj);
+                    if ni >= 0 && (ni as usize) < w && nj < h {
+                        cov[nj * w + ni as usize] += e;
+                    }
+                }
+            }
         }
     }
 }
@@ -162,5 +278,33 @@ mod tests {
         let st = TextStyle::named("body").unwrap();
         let t = st.truncate("a fairly long line of text", 100.0);
         assert!(t.ends_with('…') && st.width(&t) <= 100.0);
+    }
+
+    #[test]
+    fn faces_differ_and_mono_is_monospaced() {
+        let mut st = TextStyle::named("body").unwrap();
+        let sans = st.width("Illuminati");
+        st.face = Face::Mono;
+        assert_eq!(st.width("iiii"), st.width("WWWW"));
+        assert_ne!(st.width("Illuminati"), sans);
+        st.face = Face::Serif;
+        st.italic = true;
+        assert!(st.width("Illuminati") > 0.0);
+    }
+
+    #[test]
+    fn missing_characters_come_from_noto_sans() {
+        let overpass = font(Face::Overpass, false, false);
+        let sans = font(Face::Sans, false, false);
+        let c = ['→', 'Ж', 'Ω', '₹', '≈']
+            .into_iter()
+            .find(|&c| overpass.glyph_id(c).0 == 0 && sans.glyph_id(c).0 != 0)
+            .expect("a character Overpass lacks and Noto Sans has");
+        let mut st = TextStyle::named("title").unwrap();
+        st.face = Face::Overpass;
+        let mut cv = Canvas::new(200, 60);
+        st.draw(&mut cv, 10.0, 10.0, &c.to_string(), super::super::BLACK);
+        let ink = (0..60).flat_map(|y| (0..200).map(move |x| (x, y))).filter(|&(x, y)| cv.get(x, y) == 0).count();
+        assert!(ink > 20, "the arrow was drawn ({ink} pixels)");
     }
 }

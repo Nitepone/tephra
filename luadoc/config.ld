@@ -8,8 +8,8 @@ Apps are Lua code that returns a table. tephra runs an instance's **config** fir
 optional **config check**, then the app's `fetch` (on a schedule, for data) and `render` (for every
 image, to draw). Start with the guide, then look things up in the modules.
 ]]
-file = { "app.lua", "ui.lua", "http.lua", "json.lua", "globals.lua" }
-topics = { "guide.md" }
+file = { "app.lua", "ui.lua", "time.lua", "http.lua", "json.lua", "globals.lua" }
+topics = { "guide.md", "dev-api.md" }
 dir = "../web/luadoc"
 format = "markdown"
 sort_modules = false

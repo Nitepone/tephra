@@ -55,17 +55,35 @@ function ui.box(t) end
 --- Text.
 --
 -- Styles: `small` 16 px, `body` 22 px (the default), `label` 16 px bold, `title` 26 px bold,
--- `large` 44 px bold, `huge` 96 px bold. The typeface is Noto Sans.
+-- `large` 44 px bold, `huge` 96 px bold. A size is the height of a line, in pixels.
+--
+-- Fonts: `sans` (Noto Sans, the default), `serif` (Noto Serif), `mono` (Noto Sans Mono, every
+-- character the same width, for columns of numbers and times) and `overpass` (Overpass). Each
+-- has regular and bold; only `serif` has italic, and the others ignore it. A character a font
+-- lacks is drawn from Noto Sans.
+--
+-- Text is drawn crisp: each pixel is black or white by how much of it the letter covers. With
+-- `smooth`, the edges are dithered instead, which softens the curves of large text (about 60 px
+-- and up) but makes small text grainy.
 -- @tparam table t The text (a string or a number), then options:
 -- @tparam[opt="body"] string t.style One of the styles above.
 -- @tparam[opt] number t.size A size in pixels instead of the style's.
 -- @tparam[opt] bool t.bold Bold or not, instead of the style's.
+-- @tparam[opt="sans"] string t.font `"sans"`, `"serif"`, `"mono"` or `"overpass"`.
+-- @tparam[opt=false] bool t.italic Italic, for `serif`.
+-- @tparam[opt=false] bool t.smooth Dither the edges, for large text.
+-- @tparam[opt] string t.fit `"shrink"`: use the largest size, from the style's (or `size`) down
+-- to `min_size`, at which the text fits its space without being cut: no "…", no lines left
+-- out, no words broken. If none fits, `min_size`, cut as usual.
+-- @tparam[opt=10] number t.min_size The smallest size `fit = "shrink"` may use.
 -- @tparam[opt=false] bool t.wrap Break into lines to fit the width. Without it, a line that
 -- doesn't fit ends in "…". Newlines always break.
 -- @tparam[opt] int t.max_lines At most this many lines; the last ends in "…" if cut.
 -- @tparam[opt="left"] string t.align `"left"`, `"center"` or `"right"`.
 -- @treturn Node
 -- @usage ui.text { "A long forecast for the week…", wrap = true, max_lines = 3 }
+-- @usage ui.text { data.race_name, style = "huge", fit = "shrink", min_size = 24 }
+-- @usage ui.text { "08:00", font = "mono", bold = true }
 function ui.text(t) end
 
 --- An image, scaled to its space and dithered to black and white.
@@ -79,6 +97,24 @@ function ui.text(t) end
 -- @treturn Node
 -- @usage ui.image { data.photo, fit = "cover", grow = 1 }
 function ui.image(t) end
+
+--- The size a node would take, before drawing it.
+--
+-- Use it to decide what fits instead of guessing at letter widths. The size is what the node
+-- asks for within `max_w` × `max_h`, the same way a column or row measures it. Text with
+-- `fit = "shrink"` is measured at its full size.
+-- @tparam Node|string node A node made with these functions, or a string (as body text).
+-- @tparam[opt] number max_w The width available: wrapping text breaks to fit it.
+-- Unlimited if left out.
+-- @tparam[opt] number max_h The height available. Unlimited if left out.
+-- @treturn table `{ w = ..., h = ... }` in pixels; for text also `lines` and `line_height`.
+-- @usage local title = ui.text { data.name, style = "large", wrap = true }
+-- local m = ui.measure(title, slot.w)
+-- local room_left = slot.h - m.h
+-- @usage -- The widest label, to size a column:
+-- local w = 0
+-- for _, s in ipairs(sessions) do w = math.max(w, ui.measure(s.label).w) end
+function ui.measure(node, max_w, max_h) end
 
 --- A line across its parent: horizontal in a column, vertical in a row.
 -- @tparam[opt] table t Options:

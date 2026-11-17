@@ -1,0 +1,223 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<head>
+    <title>tephra Lua API</title>
+    <link rel="stylesheet" href="../ldoc.css" type="text/css" />
+</head>
+<body>
+
+<div id="container">
+
+<div id="product">
+	<div id="product_logo"></div>
+	<div id="product_name"><big><b></b></big></div>
+	<div id="product_description"></div>
+</div> <!-- id="product" -->
+
+
+<div id="main">
+
+
+<!-- Menu -->
+
+<div id="navigation">
+<br/>
+<h1>tephra</h1>
+
+
+<ul>
+  <li><a href="../index.html">Index</a></li>
+</ul>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#POST__api_v1_dev_fetch">POST /api/v1/dev/fetch </a></li>
+<li><a href="#POST__api_v1_dev_render">POST /api/v1/dev/render </a></li>
+<li><a href="#Limits">Limits </a></li>
+</ul>
+
+
+<h2>Topics</h2>
+<ul class="">
+  <li><a href="../topics/guide.md.html">guide</a></li>
+  <li><strong>dev-api</strong></li>
+</ul>
+<h2>Modules</h2>
+<ul class="nowrap">
+  <li><a href="../modules/app.html">app</a></li>
+  <li><a href="../modules/ui.html">ui</a></li>
+  <li><a href="../modules/time.html">time</a></li>
+  <li><a href="../modules/http.html">http</a></li>
+  <li><a href="../modules/json.html">json</a></li>
+  <li><a href="../modules/globals.html">globals</a></li>
+</ul>
+
+</div>
+
+<div id="content">
+
+
+<h1>Testing from the command line</h1>
+
+<p>tephra has an HTTP API for trying app code that isn't saved anywhere. It renders the code to the
+same PNG a device would get and reports, node by node, what was drawn where and what didn't fit.
+It's meant for scripts and coding agents that can't watch the <strong>Try it</strong> panel.</p>
+
+<p>It runs any Lua it's sent, with network access, so <strong>it only answers requests from the machine
+tephra runs on</strong> (<code>127.0.0.1</code> or <code>::1</code>). Anywhere else gets <code>403</code>.</p>
+
+<p>Both endpoints take JSON with the app:</p>
+
+<ul>
+    <li><code>code</code>: the app's code (required).</li>
+    <li><code>validate</code>: its config check. Runs when not empty.</li>
+    <li><code>config</code>: an instance config, such as <code>&quot;units = &apos;imperial&apos;&quot;</code>.</li>
+</ul>
+
+<p><a name="POST__api_v1_dev_fetch"></a></p>
+<h2>POST /api/v1/dev/fetch</h2>
+
+<p>Runs the config, the check and <code>fetch</code>, and returns what <code>fetch</code> returned. Keep it, and pass it
+to <code>render</code> as <code>data</code> to re-render without fetching again.</p>
+
+
+<pre>
+jq -n <span class="comment">--rawfile code app.lua \
+</span>  <span class="string">'{code: $code, config: "season = 2024"}'</span> &gt; fetch.json
+curl -s localhost:<span class="number">8374</span>/api/v1/dev/fetch \
+  -<span class="function-name">H</span> <span class="string">'content-type: application/json'</span> -d @fetch.json &gt; fetched.json
+</pre>
+
+<p>Answer (<code>200</code>, or <code>422</code> when something failed):</p>
+
+
+<pre>
+{ <span class="string">"ok"</span>: <span class="keyword">true</span>, <span class="string">"data"</span>: { ... }, <span class="string">"fetch"</span>: { <span class="string">"ms"</span>: <span class="number">812</span>, <span class="string">"limit_ms"</span>: <span class="number">60000</span> } }
+</pre>
+
+<p><a name="POST__api_v1_dev_render"></a></p>
+<h2>POST /api/v1/dev/render</h2>
+
+<p>Runs the config, the check, <code>fetch</code> (unless <code>data</code> is given) and <code>render</code>, at one or more slot
+sizes. Besides the app, it takes:</p>
+
+<ul>
+    <li><code>data</code>: render with this instead of running <code>fetch</code>.</li>
+    <li><code>size</code>: <code>&quot;full&quot;</code> (the default), <code>&quot;large&quot;</code>, <code>&quot;half&quot;</code> or <code>&quot;small&quot;</code>. Or <code>sizes</code>: a list of them, or
+    <code>&quot;all&quot;</code>.</li>
+    <li><code>w</code>, <code>h</code>: the panel, 800 × 480 by default.</li>
+    <li><code>title_bar</code>: draw the slot's title bar, as most slots on a device have (default <code>true</code>). It
+    takes 30 pixels from the app.</li>
+    <li><code>format</code>: <code>&quot;png&quot;</code> for an image instead of the JSON report (also <code>?format=png</code>). One size gives
+    the device image; several give a sheet of them, labelled. If anything fails, the answer is the
+    JSON report instead, with status <code>422</code>.</li>
+</ul>
+
+<p>Every size is drawn as its own device screen: the app in the first slot of a layout with that
+size, the other slots empty.</p>
+
+
+<pre>
+jq -n <span class="comment">--rawfile code app.lua --slurpfile f fetched.json \
+</span>  <span class="string">'{code: $code, config: "season = 2024",
+    data: $f[0].data, sizes: "all"}'</span> &gt; req.json
+
+# A sheet of all four sizes, to look at:
+curl -<span class="function-name">s</span> <span class="string">'localhost:8374/api/v1/dev/render?format=png'</span> \
+  -<span class="function-name">H</span> <span class="string">'content-type: application/json'</span> -d @req.json -o sheet.png
+
+# What did <span class="keyword">not</span> fit, size by size:
+curl -s localhost:<span class="number">8374</span>/api/v1/dev/render \
+  -<span class="function-name">H</span> <span class="string">'content-type: application/json'</span> -d @req.json \
+  | <span class="function-name">jq</span> <span class="string">'.renders[] | {size, problems}'</span>
+</pre>
+
+<h3>The report</h3>
+
+
+<pre>
+{
+  <span class="string">"ok"</span>: <span class="keyword">true</span>,
+  <span class="string">"fetch"</span>: null,
+  <span class="string">"renders"</span>: [{
+    <span class="string">"size"</span>: <span class="string">"half"</span>,
+    <span class="string">"slot"</span>: { <span class="string">"x"</span>: <span class="number">24</span>, <span class="string">"y"</span>: <span class="number">24</span>, <span class="string">"w"</span>: <span class="number">356</span>, <span class="string">"h"</span>: <span class="number">402</span> },
+    <span class="string">"ms"</span>: <span class="number">3</span>, <span class="string">"limit_ms"</span>: <span class="number">2000</span>,
+    <span class="string">"png_bytes"</span>: <span class="number">3181</span>,
+    <span class="string">"png"</span>: <span class="string">"iVBORw0…"</span>,
+    <span class="string">"problems"</span>: [
+      <span class="string">"root/2/1 text \"Max Verstappen\": too_wide"</span>
+    ],
+    <span class="string">"layout"</span>: [
+      { <span class="string">"path"</span>: <span class="string">"root"</span>, <span class="string">"kind"</span>: <span class="string">"column"</span>,
+        <span class="string">"x"</span>: <span class="number">24</span>, <span class="string">"y"</span>: <span class="number">24</span>, <span class="string">"w"</span>: <span class="number">356</span>, <span class="string">"h"</span>: <span class="number">402</span> },
+      { <span class="string">"path"</span>: <span class="string">"root/2/1"</span>, <span class="string">"kind"</span>: <span class="string">"text"</span>,
+        <span class="string">"x"</span>: <span class="number">74</span>, <span class="string">"y"</span>: <span class="number">70</span>, <span class="string">"w"</span>: <span class="number">72</span>, <span class="string">"h"</span>: <span class="number">22</span>,
+        <span class="string">"text"</span>: <span class="string">"Max Verstappen"</span>, <span class="string">"size"</span>: <span class="number">22</span>,
+        <span class="string">"lines"</span>: <span class="number">1</span>, <span class="string">"cut"</span>: [<span class="string">"too_wide"</span>] }
+    ]
+  }]
+}
+</pre>
+
+<p>What the fields mean:</p>
+
+<ul>
+    <li><code>fetch</code>: <code>null</code> when <code>data</code> was given or the app has no <code>fetch</code>; otherwise its time and any error.</li>
+    <li><code>slot</code>: the space the app drew into, in panel pixels. <code>layout</code> uses the same coordinates.</li>
+    <li><code>png</code>: the device image as base64. <code>jq -r &apos;.renders[0].png&apos; | base64 -d &gt; half.png</code> saves it.</li>
+    <li><code>problems</code>: everything in <code>layout</code> worth a look, in words; also a render that took more than
+    half its limit, and an image larger than the 90,000 bytes an OG accepts.</li>
+    <li><code>layout</code>: every node, in drawing order. <code>path</code> is <code>root</code>, then child indexes counted from 0, so
+    <code>root/2/1</code> is the second child of the root's third child. <code>kind</code> is <code>column</code>, <code>row</code>, <code>box</code>,
+    <code>text</code>, <code>image</code>, <code>rule</code> or <code>spacer</code>.</li>
+    <li>Text nodes add <code>text</code> (its first 80 characters), <code>size</code> (its height in pixels) and <code>lines</code>
+    (lines drawn). Images add <code>image</code>: source width and height, then drawn width and height.</li>
+    <li><code>overflow_px</code>, on a column: how many pixels taller its children wanted to be than it is.</li>
+    <li><code>cut</code>, on a node that didn't fit: the reasons, below.</li>
+</ul>
+
+<p>The reasons in <code>cut</code>:</p>
+
+<ul>
+    <li><code>too_wide</code>: a line that doesn't wrap ended in "…".</li>
+    <li><code>max_lines</code>: wrapped text had more lines than <code>max_lines</code>.</li>
+    <li><code>too_tall</code>: lines below the bottom of the node were left out.</li>
+    <li><code>word_split</code>: a word wider than the line was broken.</li>
+    <li><code>no_space</code>: the node got no room at all.</li>
+</ul>
+
+<h3>Errors</h3>
+
+<p>A failure says where it happened. <code>stage</code> is <code>load</code> (the code itself), <code>fetch</code> or <code>render</code>, and
+<code>chunk</code> and <code>line</code> give the place in the code (<a href="../modules/app.html#">app</a>, <code>config</code> or <code>config check</code>):</p>
+
+
+<pre>
+{ <span class="string">"stage"</span>: <span class="string">"render"</span>, <span class="string">"chunk"</span>: <span class="string">"app"</span>, <span class="string">"line"</span>: <span class="number">14</span>,
+  <span class="string">"message"</span>: <span class="string">"attempt to index a nil value (field 'driver')"</span>,
+  <span class="string">"traceback"</span>: <span class="string">"stack traceback:\n\t[C]: in metamethod …"</span> }
+</pre>
+
+<p>A <code>load</code> failure is the whole answer (<code>422</code>). A <code>fetch</code> failure is reported in <code>fetch</code>, and the
+renders then get <code>nil</code> as <code>data</code>. A <code>render</code> failure is in that size's <code>error</code>, and its image
+shows the message where the app would be.</p>
+
+<p><a name="Limits"></a></p>
+<h2>Limits</h2>
+
+<p>These are the same as on a device: <code>render</code> (with the config and check) has 2 seconds, <code>fetch</code>
+has 60, and each may use 64 MB. <code>ms</code> and <code>limit_ms</code> show how close a run came.</p>
+
+
+</div> <!-- id="content" -->
+</div> <!-- id="main" -->
+<div id="about">
+<i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
+<i style="float:right;">Last updated 2026-11-16 17:29:59 </i>
+</div> <!-- id="about" -->
+</div> <!-- id="container" -->
+</body>
+</html>

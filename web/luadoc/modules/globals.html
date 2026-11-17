@@ -42,6 +42,7 @@
 <ul class="nowrap">
   <li><a href="../modules/app.html">app</a></li>
   <li><a href="../modules/ui.html">ui</a></li>
+  <li><a href="../modules/time.html">time</a></li>
   <li><a href="../modules/http.html">http</a></li>
   <li><a href="../modules/json.html">json</a></li>
   <li><strong>globals</strong></li>
@@ -49,6 +50,7 @@
 <h2>Topics</h2>
 <ul class="">
   <li><a href="../topics/guide.md.html">guide</a></li>
+  <li><a href="../topics/dev-api.md.html">dev-api</a></li>
 </ul>
 
 </div>
@@ -60,7 +62,11 @@
 <p> Each config, check, fetch and render runs in a fresh Lua 5.4 state, so nothing carries over
  between calls except what <code>fetch</code> returns. The standard <code>string</code>, <code>table</code>, <code>math</code> and <code>utf8</code>
  libraries are there, and of <code>os</code> only <code>os.time</code>, <code>os.date</code>, <code>os.clock</code> and <code>os.difftime</code>
- (in the server's timezone). There is no file access, <code>require</code>, <code>io</code> or process control.</p>
+ (in the server's timezone; <a href="../modules/time.html#">time</a> does more, in any zone). There is no file access,
+ <code>require</code>, <code>io</code> or process control.</p>
+
+<p> tephra adds a few string and table helpers that Lua lacks, listed below. The string ones
+ work as methods too: <code>s:split(&quot;,&quot;)</code>.</p>
 
 <p> A call may use up to 64 MB of memory.</p>
 
@@ -78,6 +84,42 @@
 	<tr>
 	<td class="name" nowrap><a href="#print">print(...)</a></td>
 	<td class="summary">The same as <a href="../modules/globals.html#log">log</a>.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#string.split">string.split(s[, sep[, plain=false]])</a></td>
+	<td class="summary">Splits a string.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#string.trim">string.trim(s)</a></td>
+	<td class="summary">Removes whitespace from both ends.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#string.starts">string.starts(s, prefix)</a></td>
+	<td class="summary">Whether a string starts with a prefix.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#string.ends">string.ends(s, suffix)</a></td>
+	<td class="summary">Whether a string ends with a suffix.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#table.map">table.map(t, f)</a></td>
+	<td class="summary">A new list of <code>f(value, index)</code> for each item.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#table.filter">table.filter(t, f)</a></td>
+	<td class="summary">A new list of the items for which <code>f(value, index)</code> is true.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#table.find">table.find(t, f)</a></td>
+	<td class="summary">The first item for which <code>f(value, index)</code> is true, and its index; nil if none is.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#table.keys">table.keys(t)</a></td>
+	<td class="summary">A table's keys, sorted.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#table.slice">table.slice(t[, i=1[, j=#t]])</a></td>
+	<td class="summary">Items <code>i</code> to <code>j</code> of a list, as a new list.</td>
 	</tr>
 </table>
 <h2><a href="#Tables">Tables</a></h2>
@@ -176,6 +218,343 @@
 
 
 </dd>
+    <dt>
+    <a name = "string.split"></a>
+    <strong>string.split(s[, sep[, plain=false]])</strong>
+    </dt>
+    <dd>
+    Splits a string.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">sep</span>
+            <span class="types"><span class="type">string</span></span>
+         A Lua pattern (or plain text, with <code>plain</code>) to split at. Left out: runs of
+ whitespace, and empty pieces are dropped.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">plain</span>
+            <span class="types"><span class="type">boolean</span></span>
+         Treat <code>sep</code> as plain text.
+         (<em>default</em> false)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">{string,...}</span></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <li><pre class="example">(<span class="string">"a,b,,c"</span>):<span class="function-name">split</span>(<span class="string">","</span>)   <span class="comment">--&gt; { "a", "b", "", "c" }</span></pre></li>
+        <li><pre class="example">(<span class="string">"  two   words "</span>):<span class="function-name">split</span>() <span class="comment">--&gt; { "two", "words" }</span></pre></li>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "string.trim"></a>
+    <strong>string.trim(s)</strong>
+    </dt>
+    <dd>
+    Removes whitespace from both ends.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">string</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "string.starts"></a>
+    <strong>string.starts(s, prefix)</strong>
+    </dt>
+    <dd>
+    Whether a string starts with a prefix.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">prefix</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">bool</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "string.ends"></a>
+    <strong>string.ends(s, suffix)</strong>
+    </dt>
+    <dd>
+    Whether a string ends with a suffix.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">s</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">suffix</span>
+            <span class="types"><span class="type">string</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">bool</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "table.map"></a>
+    <strong>table.map(t, f)</strong>
+    </dt>
+    <dd>
+    A new list of <code>f(value, index)</code> for each item.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         A list.
+        </li>
+        <li><span class="parameter">f</span>
+            <span class="types"><span class="type">function</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+
+
+
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <pre class="example"><span class="global">table</span>.<span class="function-name">map</span>(drivers, <span class="keyword">function</span>(d) <span class="keyword">return</span> d.name <span class="keyword">end</span>)</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "table.filter"></a>
+    <strong>table.filter(t, f)</strong>
+    </dt>
+    <dd>
+    A new list of the items for which <code>f(value, index)</code> is true.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         A list.
+        </li>
+        <li><span class="parameter">f</span>
+            <span class="types"><span class="type">function</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "table.find"></a>
+    <strong>table.find(t, f)</strong>
+    </dt>
+    <dd>
+    The first item for which <code>f(value, index)</code> is true, and its index; nil if none is.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+         A list.
+        </li>
+        <li><span class="parameter">f</span>
+            <span class="types"><span class="type">function</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+        <li>
+        The item.</li>
+        <li>
+           <span class="types">optional <span class="type">int</span></span>
+        Its index.</li>
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "table.keys"></a>
+    <strong>table.keys(t)</strong>
+    </dt>
+    <dd>
+    A table's keys, sorted.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+
+
+
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
+    <dt>
+    <a name = "table.slice"></a>
+    <strong>table.slice(t[, i=1[, j=#t]])</strong>
+    </dt>
+    <dd>
+    Items <code>i</code> to <code>j</code> of a list, as a new list.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">t</span>
+            <span class="types"><span class="type">table</span></span>
+
+
+
+        </li>
+        <li><span class="parameter">i</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+         (<em>default</em> 1)
+        </li>
+        <li><span class="parameter">j</span>
+            <span class="types"><span class="type">integer</span></span>
+
+
+
+         (<em>default</em> #t)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+
+
+
+    </ol>
+
+
+
+
+</dd>
 </dl>
     <h2 class="section-header "><a name="Tables"></a>Tables</h2>
 
@@ -211,7 +590,7 @@
 </div> <!-- id="main" -->
 <div id="about">
 <i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
-<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+<i style="float:right;">Last updated 2026-11-16 17:29:59 </i>
 </div> <!-- id="about" -->
 </div> <!-- id="container" -->
 </body>

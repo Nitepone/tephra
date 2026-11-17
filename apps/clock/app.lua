@@ -10,19 +10,16 @@ return {
   },
 
   render = function(_, slot, config)
-    local time
-    if config.hour24 then
-      time = os.date("%H:%M")
-    else
-      time = (os.date("%I:%M"):gsub("^0", "")) .. os.date(" %p")
-    end
-    -- As large as the slot allows: the digits are about half as wide as they are tall.
-    local size = math.min(slot.h * (config.show_date and 0.5 or 0.7), slot.w / (#time * 0.6))
+    local now = time.now()
+    local clock = time.format(now, config.hour24 and "%H:%M" or "%-I:%M %p")
+    -- As large as the slot allows: measure the time at 100 px and scale to the width.
+    local at100 = ui.measure(ui.text { clock, size = 100, bold = true })
+    local size = math.min(slot.h * (config.show_date and 0.5 or 0.7), 100 * slot.w / at100.w)
     local date_style = slot.size == "small" and "body" or "title"
     return ui.column {
       justify = "center",
-      ui.text { time, size = size, bold = true, align = "center" },
-      config.show_date and ui.text { (os.date("%A, %B %d"):gsub(" 0", " ")), style = date_style, align = "center" } or nil,
+      ui.text { clock, size = size, bold = true, align = "center", fit = "shrink" },
+      config.show_date and ui.text { time.format(now, "%A, %B %-d"), style = date_style, align = "center" } or nil,
     }
   end,
 }

@@ -9,7 +9,7 @@
 
 use crate::model::StoredApp;
 use crate::render::decode_gray;
-use crate::render::font::TextStyle;
+use crate::render::font::{Face, TextStyle};
 use crate::render::layout::{Align, Common, Dir, Fit, Justify, Node, TextAlign};
 use mlua::{HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, Value, VmState};
 use serde::{Deserialize, Serialize};
@@ -255,6 +255,7 @@ fn new_lua(label: &str, data_dir: &Path, network: bool, time: Duration) -> mlua:
         g.set("http", http_table(&lua)?)?;
     }
     lua.load(PRELUDE).set_name("=prelude").exec()?;
+    crate::luatime::install(&lua)?;
     Ok(lua)
 }
 
@@ -448,7 +449,10 @@ pub fn stored_meta(s: &StoredApp) -> AppMeta {
 }
 
 fn load_app(lua: &Lua, app: &AppMeta) -> mlua::Result<Table> {
-    lua.load(&app.code).set_name("=app").eval()
+    match lua.load(&app.code).set_name("=app").eval::<Value>()? {
+        Value::Table(t) => Ok(t),
+        v => Err(mlua::Error::runtime(format!("the code must return a table, not {}", v.type_name()))),
+    }
 }
 
 /// "90s", "15m", "1h", "1d" -> seconds (at least 60).
@@ -464,6 +468,46 @@ fn parse_duration(s: &str) -> Option<u64> {
         _ => return None,
     };
     Some((n * mult).max(60))
+}
+
+/// A Lua failure, with where it happened when Lua said.
+#[derive(Debug, Clone, Serialize)]
+pub struct LuaFailure {
+    /// The message without its position, e.g. "attempt to index a nil value (field 'x')".
+    pub message: String,
+    /// Which code: `app`, `config` or `config check`.
+    pub chunk: Option<String>,
+    pub line: Option<u32>,
+    /// Lua's stack traceback, when there is one.
+    pub traceback: Option<String>,
+}
+
+impl LuaFailure {
+    fn from_error(e: &mlua::Error) -> Self {
+        let full = e.to_string();
+        let traceback = full.split_once("\nstack traceback:").map(|(_, t)| format!("stack traceback:{t}"));
+        Self { traceback, ..Self::parse(&short_error(e)) }
+    }
+
+    /// Splits a message like "app:12: attempt to call a nil value" into its parts.
+    pub fn parse(short: &str) -> Self {
+        let short = short.to_string();
+        let traceback = None;
+        // "app:12: message" (chunk names are ours: app, config, config check).
+        for chunk in ["config check", "config", "app"] {
+            if let Some(rest) = short.strip_prefix(chunk).and_then(|r| r.strip_prefix(':'))
+                && let Some((line, msg)) = rest.split_once(": ")
+                && let Ok(line) = line.parse()
+            {
+                return Self { message: msg.to_string(), chunk: Some(chunk.into()), line: Some(line), traceback };
+            }
+        }
+        Self { message: short, chunk: None, line: None, traceback }
+    }
+
+    fn plain(message: &str) -> Self {
+        Self { message: message.to_string(), chunk: None, line: None, traceback: None }
+    }
 }
 
 fn short_error(e: &mlua::Error) -> String {
@@ -522,6 +566,18 @@ pub fn fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_j
     if let Some(e) = &app.error {
         return Err(e.clone());
     }
+    run_fetch(app, config_src, data_dir).map_err(|e| short_error(&e))
+}
+
+/// `fetch`, with the failure's position and traceback.
+pub fn fetch_detailed(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_json::Value, LuaFailure> {
+    if let Some(e) = &app.error {
+        return Err(LuaFailure::plain(e));
+    }
+    run_fetch(app, config_src, data_dir).map_err(|e| LuaFailure::from_error(&e))
+}
+
+fn run_fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> mlua::Result<serde_json::Value> {
     (|| -> mlua::Result<serde_json::Value> {
         let lua = new_lua(&app.name, data_dir, true, FETCH_TIME)?;
         let config = prepare_config(&lua, app, config_src)?;
@@ -530,7 +586,6 @@ pub fn fetch(app: &AppMeta, config_src: &str, data_dir: &Path) -> Result<serde_j
         let out: Value = f.call(config)?;
         lua.from_value(out)
     })()
-    .map_err(|e| short_error(&e))
 }
 
 /// Runs the app's `render(data, slot, config)` and turns the tree it returns into nodes.
@@ -538,8 +593,21 @@ pub fn render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: S
     if let Some(e) = &app.error {
         return Err(e.clone());
     }
+    run_render(app, config_src, data, slot, data_dir).map_err(|e| short_error(&e))
+}
+
+/// `render`, with the failure's position and traceback.
+pub fn render_detailed(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> Result<Node, LuaFailure> {
+    if let Some(e) = &app.error {
+        return Err(LuaFailure::plain(e));
+    }
+    run_render(app, config_src, data, slot, data_dir).map_err(|e| LuaFailure::from_error(&e))
+}
+
+fn run_render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: Slot, data_dir: &Path) -> mlua::Result<Node> {
     (|| -> mlua::Result<Node> {
         let lua = new_lua(&app.name, data_dir, false, RENDER_TIME)?;
+        install_measure(&lua, app.dir.clone(), data_dir.to_path_buf())?;
         let config = prepare_config(&lua, app, config_src)?;
         let t = load_app(&lua, app)?;
         let f: mlua::Function = t.get("render")?;
@@ -547,7 +615,35 @@ pub fn render(app: &AppMeta, config_src: &str, data: &serde_json::Value, slot: S
         let ctx = NodeCtx { app_dir: app.dir.as_deref(), data_dir };
         node_from_lua(&tree, &ctx).map_err(mlua::Error::runtime)
     })()
-    .map_err(|e| short_error(&e))
+}
+
+/// `ui.measure(node [, max_w [, max_h]])`: the size a node would take, before drawing it.
+fn install_measure(lua: &Lua, app_dir: Option<PathBuf>, data_dir: PathBuf) -> mlua::Result<()> {
+    let ui: Table = lua.globals().get("ui")?;
+    let measure = lua.create_function(move |lua, (node, max_w, max_h): (Value, Option<f32>, Option<f32>)| {
+        let ctx = NodeCtx { app_dir: app_dir.as_deref(), data_dir: &data_dir };
+        // A bare string measures as body text.
+        let node = match node {
+            Value::String(s) => {
+                let t = lua.create_table()?;
+                t.set(1, s)?;
+                t.set("kind", "text")?;
+                Value::Table(t)
+            }
+            v => v,
+        };
+        let n = node_from_lua(&node, &ctx).map_err(mlua::Error::runtime)?;
+        let (w, h, lines) = n.measured(max_w.unwrap_or(f32::INFINITY), max_h.unwrap_or(f32::INFINITY));
+        let out = lua.create_table()?;
+        out.set("w", w.ceil())?;
+        out.set("h", h.ceil())?;
+        if let Node::Text { style, .. } = &n {
+            out.set("lines", lines.unwrap_or(1))?;
+            out.set("line_height", style.line_height())?;
+        }
+        Ok(out)
+    })?;
+    ui.set("measure", measure)
 }
 
 struct NodeCtx<'a> {
@@ -616,6 +712,16 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
             if let Some(b) = get_b("bold") {
                 style.bold = b;
             }
+            if let Some(f) = get_s("font") {
+                style.face = Face::parse(&f).ok_or_else(|| format!("unknown font {f:?}: use {}", Face::NAMES))?;
+            }
+            style.italic = get_b("italic").unwrap_or(false);
+            style.smooth = get_b("smooth").unwrap_or(false);
+            let shrink_to = match get_s("fit").as_deref() {
+                None => None,
+                Some("shrink") => Some(get_f("min_size").unwrap_or(10.0).clamp(6.0, style.size)),
+                Some(other) => return Err(format!("text fit {other:?}: the only choice is \"shrink\"")),
+            };
             Node::Text {
                 text,
                 style,
@@ -626,6 +732,7 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
                     _ => TextAlign::Left,
                 },
                 max_lines: t.get::<Option<usize>>("max_lines").ok().flatten(),
+                shrink_to,
                 common,
             }
         }
@@ -810,6 +917,41 @@ mod tests {
         end }"#);
         let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
         assert_eq!(first_text(&node), "[1,2]nil2");
+    }
+
+    #[test]
+    fn failures_say_where() {
+        let meta = stored("return { render = function(d, s, c)\n  return ui.text { c.missing.field }\nend }");
+        let e = render_detailed(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert_eq!((e.chunk.as_deref(), e.line), (Some("app"), Some(2)), "{e:?}");
+        assert!(e.message.contains("missing"), "{e:?}");
+        assert!(e.traceback.is_some());
+        let e = render_detailed(&stored(DEMO), "who = = 1", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert_eq!((e.chunk.as_deref(), e.line), (Some("config"), Some(1)), "{e:?}");
+    }
+
+    #[test]
+    fn measure_matches_what_is_drawn() {
+        let meta = stored(r#"return { render = function(d, slot)
+            local one = ui.measure(ui.text { "Abu Dhabi Grand Prix", style = "large" })
+            local wrapped = ui.measure(ui.text { "Abu Dhabi Grand Prix", style = "large", wrap = true }, 200)
+            local mono = ui.measure(ui.text { "0000", font = "mono" })
+            local mono1 = ui.measure(ui.text { "1111", font = "mono" })
+            return ui.text { one.lines .. " " .. wrapped.lines .. " " .. tostring(wrapped.w <= 200)
+              .. " " .. tostring(wrapped.h == wrapped.lines * wrapped.line_height) .. " " .. tostring(mono.w == mono1.w)
+              .. " " .. ui.measure("x").lines }
+        end }"#);
+        let node = render(&meta, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap();
+        assert_eq!(first_text(&node), "1 2 true true true 1");
+    }
+
+    #[test]
+    fn text_options_are_checked() {
+        let bad = stored(r#"return { render = function() return ui.text { "x", font = "comic" } end }"#);
+        let err = render(&bad, "", &serde_json::Value::Null, slot(), Path::new(".")).unwrap_err();
+        assert!(err.contains("sans, serif, mono or overpass"), "{err}");
+        let ok = stored(r#"return { render = function() return ui.text { "x", font = "serif", italic = true, smooth = true, fit = "shrink", min_size = 12 } end }"#);
+        assert!(render(&ok, "", &serde_json::Value::Null, slot(), Path::new(".")).is_ok());
     }
 
     #[test]

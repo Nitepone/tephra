@@ -77,6 +77,8 @@ pub enum Node {
         wrap: bool,
         align: TextAlign,
         max_lines: Option<usize>,
+        /// Shrink to fit: the smallest size the text may go down to, to fit without being cut.
+        shrink_to: Option<f32>,
         common: Common,
     },
     Image {
@@ -92,6 +94,36 @@ pub enum Node {
     Spacer {
         common: Common,
     },
+}
+
+/// Where one node was drawn, and what of it didn't fit. Collected when `Canvas::report` is set.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LayoutEntry {
+    /// `root`, then the child indexes from it, counting from 0: `root/2/0`.
+    pub path: String,
+    pub kind: &'static str,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Text: the font size, and how many lines were drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<usize>,
+    /// What didn't fit: `too_wide` (a line ended in "…"), `max_lines` (more lines than allowed),
+    /// `too_tall` (lines below the bottom were left out), `word_split` (a word was broken),
+    /// `no_space` (the node got no room at all).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cut: Vec<&'static str>,
+    /// Containers: how many pixels the children needed beyond the space there was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overflow_px: Option<i32>,
+    /// Images: the source size and the size drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<[u32; 4]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,6 +151,7 @@ impl Node {
             wrap: true,
             align: TextAlign::Left,
             max_lines: None,
+            shrink_to: None,
             common: Common::default(),
         }
     }
@@ -153,7 +186,7 @@ impl Node {
         let (max_w, max_h) = (c.width.unwrap_or(max_w).min(max_w), c.height.unwrap_or(max_h).min(max_h));
         let s = match self {
             Node::Text { text, style, wrap, max_lines, .. } => {
-                let lines = text_lines(text, *style, *wrap, *max_lines, max_w);
+                let lines = text_lines(text, *style, *wrap, *max_lines, max_w).lines;
                 let w = lines.iter().map(|l| style.width(l)).fold(0.0, f32::max);
                 Size { w: w.ceil(), h: style.line_height() * lines.len() as f32 }
             }
@@ -186,18 +219,88 @@ impl Node {
         }
     }
 
+    /// The size this node takes within `max_w` x `max_h`, and for text the number of lines.
+    pub fn measured(&self, max_w: f32, max_h: f32) -> (f32, f32, Option<usize>) {
+        let s = self.measure(max_w, max_h, Dir::Column);
+        let lines = match self {
+            Node::Text { text, style, wrap, max_lines, .. } => Some(text_lines(text, *style, *wrap, *max_lines, max_w).lines.len()),
+            _ => None,
+        };
+        (s.w, s.h, lines)
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Node::Stack { invert, border, padding, .. } if *invert || *border > 0.0 || *padding > 0.0 => "box",
+            Node::Stack { dir: Dir::Row, .. } => "row",
+            Node::Stack { .. } => "column",
+            Node::Text { .. } => "text",
+            Node::Image { .. } => "image",
+            Node::Rule { .. } => "rule",
+            Node::Spacer { .. } => "spacer",
+        }
+    }
+
+    /// Adds this node to the canvas's report, if it keeps one; its index there.
+    fn report(&self, cv: &mut Canvas, r: Rect) -> Option<usize> {
+        let path = std::iter::once("root".to_string()).chain(cv.path.iter().map(|i| i.to_string())).collect::<Vec<_>>().join("/");
+        let report = cv.report.as_mut()?;
+        let mut e = LayoutEntry {
+            path,
+            kind: self.kind(),
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            text: None,
+            size: None,
+            lines: None,
+            cut: Vec::new(),
+            overflow_px: None,
+            image: None,
+        };
+        if let Node::Text { text, style, .. } = self {
+            e.text = Some(text.chars().take(80).collect());
+            e.size = Some(style.size);
+        }
+        if (r.w <= 0 || r.h <= 0) && !matches!(self, Node::Spacer { .. } | Node::Rule { .. }) {
+            e.cut.push("no_space");
+        }
+        report.push(e);
+        Some(report.len() - 1)
+    }
+
+    fn entry(cv: &mut Canvas, i: Option<usize>) -> Option<&mut LayoutEntry> {
+        cv.report.as_mut().and_then(|r| r.get_mut(i?))
+    }
+
     /// Draws this node into `r`.
     pub fn draw(&self, cv: &mut Canvas, r: Rect, ink: u8, parent: Dir) {
+        let me = self.report(cv, r);
         if r.w <= 0 || r.h <= 0 {
             return;
         }
         let clip = cv.push_clip(r);
         match self {
-            Node::Text { text, style, wrap, align, max_lines, .. } => {
+            Node::Text { text, style, wrap, align, max_lines, shrink_to, .. } => {
+                let style = &match shrink_to {
+                    Some(min) => shrunk(text, *style, *wrap, *max_lines, *min, r),
+                    None => *style,
+                };
                 let lh = style.line_height();
-                let lines = text_lines(text, *style, *wrap, *max_lines, r.w as f32);
+                let tl = text_lines(text, *style, *wrap, *max_lines, r.w as f32);
+                let lines = tl.lines;
                 // Only whole lines; at least the first.
                 let fit = ((r.h as f32 / lh).floor() as usize).max(1);
+                if let Some(e) = Self::entry(cv, me) {
+                    e.size = Some(style.size);
+                    e.lines = Some(lines.len().min(fit));
+                    for (cut, why) in [(tl.too_wide, "too_wide"), (tl.max_lines, "max_lines"), (lines.len() > fit, "too_tall"), (tl.split_word, "word_split")] {
+                        if cut {
+                            e.cut.push(why);
+                        }
+                    }
+                }
                 for (i, line) in lines.iter().take(fit).enumerate() {
                     let line = if i + 1 == fit && lines.len() > fit { style.truncate(&format!("{line}…"), r.w as f32) } else { line.clone() };
                     let lw = style.width(&line);
@@ -216,6 +319,9 @@ impl Node {
                     Fit::Cover => (r.w as f32 / iw).max(r.h as f32 / ih),
                 };
                 let (w, h) = ((iw * scale).round().max(1.0) as u32, (ih * scale).round().max(1.0) as u32);
+                if let Some(e) = Self::entry(cv, me) {
+                    e.image = Some([img.width(), img.height(), w, h]);
+                }
                 let resized = image::imageops::resize(img.as_ref(), w, h, image::imageops::FilterType::Triangle);
                 let x = r.x + (r.w - w as i32) / 2;
                 let y = r.y + (r.h - h as i32) / 2;
@@ -240,25 +346,66 @@ impl Node {
                     cv.border(r, border.round() as i32, outer);
                 }
                 let inner = r.inset((padding + border).round() as i32);
-                draw_children(cv, inner, ink, *dir, children, *gap, *align, *justify);
+                let overflow = draw_children(cv, inner, ink, *dir, children, *gap, *align, *justify);
+                if overflow >= 1.0
+                    && let Some(e) = Self::entry(cv, me)
+                {
+                    e.overflow_px = Some(overflow.round() as i32);
+                }
             }
         }
         cv.pop_clip(clip);
     }
 }
 
-fn text_lines(text: &str, style: TextStyle, wrap: bool, max_lines: Option<usize>, max_w: f32) -> Vec<String> {
-    let mut lines = if wrap {
-        style.wrap(text, max_w)
-    } else {
-        text.split('\n').map(|l| style.truncate(l, max_w)).collect()
+/// The largest size from the style's down to `min` at which the text fits `r` uncut. `min` if
+/// none does.
+fn shrunk(text: &str, style: TextStyle, wrap: bool, max_lines: Option<usize>, min: f32, r: Rect) -> TextStyle {
+    let fits = |size: f32| {
+        let st = TextStyle { size, ..style };
+        let tl = text_lines(text, st, wrap, max_lines, r.w as f32);
+        !tl.too_wide && !tl.max_lines && !tl.split_word && tl.lines.len() as f32 * st.line_height() <= r.h as f32
     };
+    let (mut lo, mut hi) = (min.min(style.size).max(1.0), style.size);
+    if fits(hi) {
+        return style;
+    }
+    // Whole pixels, by bisection: fits(lo) is assumed (or nothing does, and lo is the floor).
+    while hi - lo > 0.5 {
+        let mid = ((lo + hi) / 2.0).floor().max(lo);
+        if mid <= lo {
+            break;
+        }
+        if fits(mid) { lo = mid } else { hi = mid }
+    }
+    TextStyle { size: lo, ..style }
+}
+
+/// Text broken into the lines it is drawn as, and how it had to be cut to get there.
+struct TextLines {
+    lines: Vec<String>,
+    too_wide: bool,
+    max_lines: bool,
+    split_word: bool,
+}
+
+fn text_lines(text: &str, style: TextStyle, wrap: bool, max_lines: Option<usize>, max_w: f32) -> TextLines {
+    let (mut lines, too_wide, split_word) = if wrap {
+        let (lines, split) = style.wrap_reporting(text, max_w);
+        (lines, false, split)
+    } else {
+        let lines: Vec<String> = text.split('\n').map(|l| style.truncate(l, max_w)).collect();
+        let too_wide = text.split('\n').zip(&lines).any(|(a, b)| a != b);
+        (lines, too_wide, false)
+    };
+    let mut cut_lines = false;
     if let Some(n) = max_lines.filter(|&n| n > 0 && n < lines.len()) {
         lines.truncate(n);
         let last = lines.pop().unwrap_or_default();
         lines.push(style.truncate(&format!("{last}…"), max_w));
+        cut_lines = true;
     }
-    lines
+    TextLines { lines, too_wide, max_lines: cut_lines, split_word }
 }
 
 /// (main, cross) for a size along `dir`.
@@ -291,18 +438,27 @@ fn measure_children(dir: Dir, children: &[Node], gap: f32, w: f32, h: f32) -> Ve
         .collect()
 }
 
+/// Draws a container's children; returns how many pixels more they needed than there was.
 #[allow(clippy::too_many_arguments)]
-fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node], gap: f32, align: Align, justify: Justify) {
+fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node], gap: f32, align: Align, justify: Justify) -> f32 {
     let (main_total, cross_total) = split(dir, Size { w: r.w as f32, h: r.h as f32 });
     let gaps = gap * children.len().saturating_sub(1) as f32;
 
     // Fixed children first, in order, each with what is left; growing ones share the rest.
     let mut mains = vec![0.0f32; children.len()];
     let mut avail = main_total - gaps;
+    let mut overflow = (-avail).max(0.0);
     for (i, ch) in children.iter().enumerate() {
         if ch.common().grow <= 0.0 {
             let (cw, chh) = join(dir, avail.max(0.0), cross_total);
             mains[i] = split(dir, ch.measure(cw, chh, dir)).0.min(avail.max(0.0));
+            // What it would take with no limit, to report overflow. Only down a column: across a
+            // row, wrapping text would ask for its whole length on one line. Text that shrinks
+            // to fit takes what it gets.
+            if dir == Dir::Column && !matches!(ch, Node::Text { shrink_to: Some(_), .. }) {
+                let wanted = ch.measure(cross_total, f32::INFINITY, dir).h;
+                overflow += (wanted - mains[i]).max(0.0);
+            }
             avail -= mains[i];
         }
     }
@@ -325,7 +481,7 @@ fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node],
         Justify::Between => (0.0, 0.0),
     };
 
-    for (ch, &main) in children.iter().zip(&mains) {
+    for (i, (ch, &main)) in children.iter().zip(&mains).enumerate() {
         let cross = if align == Align::Stretch || matches!(ch, Node::Rule { .. }) {
             cross_total
         } else {
@@ -340,9 +496,12 @@ fn draw_children(cv: &mut Canvas, r: Rect, ink: u8, dir: Dir, children: &[Node],
         let (x, y) = join(dir, pos, cross_pos);
         let (w, h) = join(dir, main, cross);
         let cr = Rect::new(r.x + x.round() as i32, r.y + y.round() as i32, w.round() as i32, h.round() as i32);
+        cv.path.push(i);
         ch.draw(cv, cr, ink, dir);
+        cv.path.pop();
         pos += main + gap + extra_gap;
     }
+    overflow
 }
 
 #[cfg(test)]
@@ -379,6 +538,47 @@ mod tests {
         assert_eq!(black_in(&cv, Rect::new(0, 0, 150, 100)), 0);
         assert!(black_in(&cv, Rect::new(150, 0, 100, 100)) > 0);
         assert_eq!(black_in(&cv, Rect::new(250, 0, 150, 100)), 0);
+    }
+
+    #[test]
+    fn the_report_says_what_did_not_fit() {
+        let t = |s: &str| Node::text(s, "body");
+        let mut nowrap = t("a line far too long to fit in this narrow column");
+        if let Node::Text { wrap, .. } = &mut nowrap {
+            *wrap = false;
+        }
+        let tree = Node::column(vec![t("fits"), nowrap, t("many words ".repeat(40).as_str()), t("pushed out")], 4.0);
+        let mut cv = Canvas::new(200, 200);
+        cv.report = Some(Vec::new());
+        tree.draw(&mut cv, Rect::new(0, 0, 200, 200), BLACK, Dir::Column);
+        let r = cv.report.unwrap();
+        let by_path = |p: &str| r.iter().find(|e| e.path == p).unwrap();
+        assert_eq!(by_path("root").kind, "column");
+        assert!(by_path("root").overflow_px.unwrap() > 0, "{:?}", by_path("root"));
+        assert!(by_path("root/0").cut.is_empty());
+        assert_eq!(by_path("root/1").cut, vec!["too_wide"]);
+        assert!(by_path("root/2").cut.contains(&"too_tall"), "{:?}", by_path("root/2"));
+        assert_eq!(by_path("root/3").cut, vec!["no_space"]);
+    }
+
+    #[test]
+    fn shrink_finds_the_largest_size_that_fits() {
+        let mut t = Node::text("Abu Dhabi Grand Prix", "huge");
+        if let Node::Text { wrap, shrink_to, .. } = &mut t {
+            *wrap = false;
+            *shrink_to = Some(10.0);
+        }
+        let mut cv = Canvas::new(400, 200);
+        cv.report = Some(Vec::new());
+        t.draw(&mut cv, Rect::new(0, 0, 300, 200), BLACK, Dir::Column);
+        let e = &cv.report.unwrap()[0];
+        let size = e.size.unwrap();
+        assert!(e.cut.is_empty(), "{e:?}");
+        assert!((10.0..96.0).contains(&size), "{size}");
+        let st = TextStyle { size, ..TextStyle::named("huge").unwrap() };
+        assert!(st.width("Abu Dhabi Grand Prix") <= 300.0);
+        let bigger = TextStyle { size: size + 1.0, ..st };
+        assert!(bigger.width("Abu Dhabi Grand Prix") > 300.0, "it is the largest that fits");
     }
 
     #[test]

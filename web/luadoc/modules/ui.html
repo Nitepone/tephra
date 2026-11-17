@@ -42,6 +42,7 @@
 <ul class="nowrap">
   <li><a href="../modules/app.html">app</a></li>
   <li><strong>ui</strong></li>
+  <li><a href="../modules/time.html">time</a></li>
   <li><a href="../modules/http.html">http</a></li>
   <li><a href="../modules/json.html">json</a></li>
   <li><a href="../modules/globals.html">globals</a></li>
@@ -49,6 +50,7 @@
 <h2>Topics</h2>
 <ul class="">
   <li><a href="../topics/guide.md.html">guide</a></li>
+  <li><a href="../topics/dev-api.md.html">dev-api</a></li>
 </ul>
 
 </div>
@@ -99,6 +101,10 @@ ui.<span class="function-name">column</span> {
 	<tr>
 	<td class="name" nowrap><a href="#image">image(t)</a></td>
 	<td class="summary">An image, scaled to its space and dithered to black and white.</td>
+	</tr>
+	<tr>
+	<td class="name" nowrap><a href="#measure">measure(node[, max_w[, max_h]])</a></td>
+	<td class="summary">The size a node would take, before drawing it.</td>
 	</tr>
 	<tr>
 	<td class="name" nowrap><a href="#rule">rule([t])</a></td>
@@ -261,7 +267,16 @@ ui.<span class="function-name">column</span> {
     Text. </p>
 
 <p> Styles: <code>small</code> 16 px, <code>body</code> 22 px (the default), <code>label</code> 16 px bold, <code>title</code> 26 px bold,
- <code>large</code> 44 px bold, <code>huge</code> 96 px bold. The typeface is Noto Sans.
+ <code>large</code> 44 px bold, <code>huge</code> 96 px bold. A size is the height of a line, in pixels.</p>
+
+<p> Fonts: <code>sans</code> (Noto Sans, the default), <code>serif</code> (Noto Serif), <code>mono</code> (Noto Sans Mono, every
+ character the same width, for columns of numbers and times) and <code>overpass</code> (Overpass). Each
+ has regular and bold; only <code>serif</code> has italic, and the others ignore it. A character a font
+ lacks is drawn from Noto Sans.</p>
+
+<p> Text is drawn crisp: each pixel is black or white by how much of it the letter covers. With
+ <code>smooth</code>, the edges are dithered instead, which softens the curves of large text (about 60 px
+ and up) but makes small text grainy.
 
 
     <h3>Parameters:</h3>
@@ -282,6 +297,33 @@ ui.<span class="function-name">column</span> {
             <span class="types"><span class="type">bool</span></span>
          Bold or not, instead of the style's.
          (<em>optional</em>)
+        </li>
+        <li><span class="parameter">font</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;sans&quot;</code>, <code>&quot;serif&quot;</code>, <code>&quot;mono&quot;</code> or <code>&quot;overpass&quot;</code>.
+         (<em>default</em> "sans")
+        </li>
+        <li><span class="parameter">italic</span>
+            <span class="types"><span class="type">bool</span></span>
+         Italic, for <code>serif</code>.
+         (<em>default</em> false)
+        </li>
+        <li><span class="parameter">smooth</span>
+            <span class="types"><span class="type">bool</span></span>
+         Dither the edges, for large text.
+         (<em>default</em> false)
+        </li>
+        <li><span class="parameter">fit</span>
+            <span class="types"><span class="type">string</span></span>
+         <code>&quot;shrink&quot;</code>: use the largest size, from the style's (or <code>size</code>) down
+ to <code>min_size</code>, at which the text fits its space without being cut: no "…", no lines left
+ out, no words broken. If none fits, <code>min_size</code>, cut as usual.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">min_size</span>
+            <span class="types"><span class="type">number</span></span>
+         The smallest size <code>fit = &quot;shrink&quot;</code> may use.
+         (<em>default</em> 10)
         </li>
         <li><span class="parameter">wrap</span>
             <span class="types"><span class="type">bool</span></span>
@@ -315,7 +357,9 @@ ui.<span class="function-name">column</span> {
 
     <h3>Usage:</h3>
     <ul>
-        <pre class="example">ui.<span class="function-name">text</span> { <span class="string">"A long forecast for the week…"</span>, wrap = <span class="keyword">true</span>, max_lines = <span class="number">3</span> }</pre>
+        <li><pre class="example">ui.<span class="function-name">text</span> { <span class="string">"A long forecast for the week…"</span>, wrap = <span class="keyword">true</span>, max_lines = <span class="number">3</span> }</pre></li>
+        <li><pre class="example">ui.<span class="function-name">text</span> { data.race_name, style = <span class="string">"huge"</span>, fit = <span class="string">"shrink"</span>, min_size = <span class="number">24</span> }</pre></li>
+        <li><pre class="example">ui.<span class="function-name">text</span> { <span class="string">"08:00"</span>, font = <span class="string">"mono"</span>, bold = <span class="keyword">true</span> }</pre></li>
     </ul>
 
 </dd>
@@ -362,6 +406,57 @@ ui.<span class="function-name">column</span> {
     <h3>Usage:</h3>
     <ul>
         <pre class="example">ui.<span class="function-name">image</span> { data.photo, fit = <span class="string">"cover"</span>, grow = <span class="number">1</span> }</pre>
+    </ul>
+
+</dd>
+    <dt>
+    <a name = "measure"></a>
+    <strong>measure(node[, max_w[, max_h]])</strong>
+    </dt>
+    <dd>
+    The size a node would take, before drawing it. </p>
+
+<p> Use it to decide what fits instead of guessing at letter widths. The size is what the node
+ asks for within <code>max_w</code> × <code>max_h</code>, the same way a column or row measures it. Text with
+ <code>fit = &quot;shrink&quot;</code> is measured at its full size.
+
+
+    <h3>Parameters:</h3>
+    <ul>
+        <li><span class="parameter">node</span>
+            <span class="types"><a class="type" href="../modules/ui.html#Node">Node</a> or <span class="type">string</span></span>
+         A node made with these functions, or a string (as body text).
+        </li>
+        <li><span class="parameter">max_w</span>
+            <span class="types"><span class="type">number</span></span>
+         The width available: wrapping text breaks to fit it.
+ Unlimited if left out.
+         (<em>optional</em>)
+        </li>
+        <li><span class="parameter">max_h</span>
+            <span class="types"><span class="type">number</span></span>
+         The height available. Unlimited if left out.
+         (<em>optional</em>)
+        </li>
+    </ul>
+
+    <h3>Returns:</h3>
+    <ol>
+
+           <span class="types"><span class="type">table</span></span>
+        <code>{ w = ..., h = ... }</code> in pixels; for text also <code>lines</code> and <code>line_height</code>.
+    </ol>
+
+
+
+    <h3>Usage:</h3>
+    <ul>
+        <li><pre class="example"><span class="keyword">local</span> title = ui.<span class="function-name">text</span> { data.name, style = <span class="string">"large"</span>, wrap = <span class="keyword">true</span> }
+<span class="keyword">local</span> m = ui.<span class="function-name">measure</span>(title, slot.w)
+<span class="keyword">local</span> room_left = slot.h - m.h</pre></li>
+        <li><pre class="example"><span class="comment">-- The widest label, to size a column:
+</span><span class="keyword">local</span> w = <span class="number">0</span>
+<span class="keyword">for</span> _, s <span class="keyword">in</span> <span class="global">ipairs</span>(sessions) <span class="keyword">do</span> w = <span class="global">math</span>.<span class="function-name">max</span>(w, ui.<span class="function-name">measure</span>(s.label).w) <span class="keyword">end</span></pre></li>
     </ul>
 
 </dd>
@@ -475,7 +570,7 @@ ui.<span class="function-name">column</span> {
 </div> <!-- id="main" -->
 <div id="about">
 <i>generated by <a href="http://github.com/lunarmodules/LDoc">LDoc 1.5.0</a></i>
-<i style="float:right;">Last updated 2026-11-16 16:53:16 </i>
+<i style="float:right;">Last updated 2026-11-16 17:29:59 </i>
 </div> <!-- id="about" -->
 </div> <!-- id="container" -->
 </body>

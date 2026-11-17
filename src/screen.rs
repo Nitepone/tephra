@@ -94,6 +94,12 @@ pub struct SlotDraw {
 
 pub fn compose(w: u32, h: u32, multi: bool, slots: &[SlotDraw]) -> Canvas {
     let mut cv = Canvas::new(w, h);
+    compose_into(&mut cv, multi, slots);
+    cv
+}
+
+pub fn compose_into(cv: &mut Canvas, multi: bool, slots: &[SlotDraw]) {
+    let cv = &mut *cv;
     for s in slots {
         if multi {
             cv.border(s.geom.outer, BORDER, BLACK);
@@ -101,18 +107,17 @@ pub fn compose(w: u32, h: u32, multi: bool, slots: &[SlotDraw]) -> Canvas {
         if let Some(t) = s.geom.title {
             cv.fill(t, BLACK);
             let title = Node::text(s.title.clone(), "label");
-            title.draw(&mut cv, Rect::new(t.x + PADDING, t.y + 5, t.w - 2 * PADDING, t.h - 5), WHITE, Dir::Column);
+            title.draw(cv, Rect::new(t.x + PADDING, t.y + 5, t.w - 2 * PADDING, t.h - 5), WHITE, Dir::Column);
         }
         match &s.content {
-            Some(Ok(node)) => node.draw(&mut cv, s.geom.content, BLACK, Dir::Column),
-            Some(Err(e)) => error_node(&s.title, e).draw(&mut cv, s.geom.content, BLACK, Dir::Column),
+            Some(Ok(node)) => node.draw(cv, s.geom.content, BLACK, Dir::Column),
+            Some(Err(e)) => error_node(&s.title, e).draw(cv, s.geom.content, BLACK, Dir::Column),
             None => {}
         }
     }
-    cv
 }
 
-fn error_node(title: &str, err: &str) -> Node {
+pub fn error_node(title: &str, err: &str) -> Node {
     Node::column(vec![Node::text(format!("{title} failed"), "title"), Node::text(err.to_string(), "small")], 6.0)
 }
 

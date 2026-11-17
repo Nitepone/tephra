@@ -32,6 +32,7 @@ pub fn router() -> Router<SharedState> {
         .route("/instances/{id}", get(get_instance).put(update_instance).delete(delete_instance))
         .route("/instances/{id}/fetch", post(fetch_instance))
         .route("/log", get(log))
+        .nest("/dev", crate::dev::router())
 }
 
 /// An error the UI shows as is: `{"error": "..."}`.

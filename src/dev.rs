@@ -10,11 +10,11 @@ use crate::render::layout::{Dir, LayoutEntry, Node};
 use crate::render::{BLACK, Canvas, Rect};
 use crate::screen::{self, SlotDraw};
 use crate::SharedState;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,6 +31,8 @@ pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/render", post(render))
         .route("/fetch", post(fetch))
+        .route("/apps", post(save_app))
+        .route("/apps/{id}/export", get(export_app))
         .layer(DefaultBodyLimit::max(32 << 20))
         .route_layer(middleware::from_fn(local_only))
 }
@@ -65,6 +67,7 @@ impl AppCode {
             code: self.code.clone(),
             validate_code: self.validate.clone(),
             validate_enabled: !self.validate.trim().is_empty(),
+            prototype: false,
         })
     }
 }
@@ -337,4 +340,104 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
     }
     let status = if failed { StatusCode::UNPROCESSABLE_ENTITY } else { StatusCode::OK };
     (status, Json(json!({ "ok": !failed, "fetch": fetch, "renders": renders }))).into_response()
+}
+
+// ---- POST /dev/apps, GET /dev/apps/{id}/export ----
+
+#[derive(Deserialize)]
+struct SaveIn {
+    name: String,
+    #[serde(default)]
+    description: String,
+    code: String,
+    /// The config check; turned on when not empty.
+    #[serde(default)]
+    validate: String,
+    /// Overwrite the app already called `name` instead of answering 409.
+    #[serde(default)]
+    replace: bool,
+    #[serde(default = "yes")]
+    prototype: bool,
+}
+
+fn request_error(status: StatusCode, message: String) -> Response {
+    (status, Json(json!({ "ok": false, "error": { "stage": "request", "message": message } }))).into_response()
+}
+
+/// Saves an app as if written in the UI, after checking that its code loads and its config check
+/// compiles.
+async fn save_app(State(s): State<SharedState>, headers: axum::http::HeaderMap, Json(req): Json<SaveIn>) -> Response {
+    let name = req.name.trim().to_string();
+    let existing = s.apps.list().into_iter().find(|a| a.name.to_lowercase() == name.to_lowercase());
+    let id = match (&existing, req.replace) {
+        (Some(a), _) if a.builtin => {
+            return request_error(StatusCode::CONFLICT, format!("{:?} is a built-in app and can't be replaced; choose another name", a.name));
+        }
+        (Some(a), true) => a.id.clone(),
+        (Some(a), false) => {
+            return request_error(
+                StatusCode::CONFLICT,
+                format!("an app is already called {:?} (id {}); send \"replace\": true to overwrite it", a.name, a.id),
+            );
+        }
+        (None, _) => crate::control_api::new_app_id(),
+    };
+    let app = StoredApp {
+        id,
+        name,
+        description: req.description.trim().into(),
+        code: req.code,
+        validate_enabled: !req.validate.trim().is_empty(),
+        validate_code: req.validate,
+        prototype: req.prototype,
+    };
+    let meta = apps::stored_meta(&app);
+    if let Some(r) = load_failure(&meta) {
+        return r;
+    }
+    if meta.validate_enabled {
+        let lua = mlua::Lua::new();
+        if let Err(e) = lua.load(&meta.validate_code).set_name("=config check").into_function() {
+            let failure = LuaFailure::parse(&apps::short_error(&e));
+            let body = json!({ "ok": false, "error": Failure { stage: "load", failure } });
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+        }
+    }
+    let replaced = existing.is_some();
+    match crate::control_api::store_app(&s, app, false) {
+        Ok(out) => {
+            let id = out.app.id.clone();
+            let base = if s.cfg.public_url.is_empty() {
+                let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("localhost");
+                format!("http://{host}")
+            } else {
+                s.cfg.public_url.trim_end_matches('/').to_string()
+            };
+            let url = format!("{base}/#/apps/app/{}", urlencode(&id));
+            Json(json!({ "ok": true, "id": id, "name": out.app.name, "url": url, "replaced": replaced, "prototype": out.app.prototype }))
+                .into_response()
+        }
+        Err(e) => request_error(e.0, e.1),
+    }
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// The app's export file, exactly as the UI's Export button saves it.
+async fn export_app(State(s): State<SharedState>, Path(id): Path<String>) -> Response {
+    let Some(app) = s.apps.get(&id) else {
+        return request_error(StatusCode::NOT_FOUND, "no such app".into());
+    };
+    match crate::control_api::export_file(&app) {
+        Ok((filename, data)) => (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))],
+            data,
+        )
+            .into_response(),
+        Err(e) => request_error(e.0, e.1),
+    }
 }

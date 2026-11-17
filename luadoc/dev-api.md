@@ -7,7 +7,7 @@ It's meant for scripts and coding agents that can't watch the **Try it** panel.
 It runs any Lua it's sent, with network access, so **it only answers requests from the machine
 tephra runs on** (`127.0.0.1` or `::1`). Anywhere else gets `403`.
 
-Both endpoints take JSON with the app:
+`fetch` and `render` take JSON with the app:
 
 - `code`: the app's code (required).
 - `validate`: its config check. Runs when not empty.
@@ -120,6 +120,48 @@ A failure says where it happened. `stage` is `load` (the code itself), `fetch` o
 A `load` failure is the whole answer (`422`). A `fetch` failure is reported in `fetch`, and the
 renders then get `nil` as `data`. A `render` failure is in that size's `error`, and its image
 shows the message where the app would be.
+
+## POST /api/v1/dev/apps
+
+Saves an app, to try on the Apps page and put on a device. It takes:
+
+- `name` (required) and `description`.
+- `code` (required) and `validate`, as above. A non-empty `validate` turns the check on.
+- `replace`: overwrite the app already called `name` (default `false`).
+- `prototype`: mark the app as a prototype in the UI (default `true`).
+
+The code must load and the check must compile, or the answer is a `load` failure (`422`), as
+for `fetch`. Names are unique, ignoring case. A taken name is `409`, unless `replace` is true;
+then that app's name, description, code and check are overwritten and its instances keep
+running, now with the new code. Built-in apps can't be replaced.
+
+    jq -n --rawfile code app.lua --rawfile check validate.lua \
+      '{name: "F1 Lights Out", description: "Countdown to the next race.",
+        code: $code, validate: $check, replace: true}' > app.json
+    curl -s localhost:8374/api/v1/dev/apps \
+      -H 'content-type: application/json' -d @app.json
+
+Answer (`200`):
+
+    { "ok": true, "id": "u3f2a9c1b", "name": "F1 Lights Out",
+      "url": "http://localhost:8374/#/apps/app/u3f2a9c1b",
+      "replaced": true, "prototype": true }
+
+`url` is the app's page in the UI. It uses the server's `public_url` if set, and otherwise
+the host the request was sent to. The UI marks prototypes; unticking **Prototype** in the app's
+editor and saving keeps it as a finished app.
+
+Other errors (`400` for a missing name, `409` for a taken one) look like this:
+
+    { "ok": false, "error": { "stage": "request", "message": "..." } }
+
+## GET /api/v1/dev/apps/{id}/export
+
+The app's export file, exactly as the **Export** button saves it, for **Import** elsewhere.
+It's the base64 of a JSON object: `format` (`"tephra-app"`), `version` (1), `name`,
+`description`, `code`, `validate_code` and `validate_enabled`.
+
+    curl -s localhost:8374/api/v1/dev/apps/u3f2a9c1b/export -o f1-lights-out.tephra-app
 
 ## Limits
 

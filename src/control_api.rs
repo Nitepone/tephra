@@ -36,7 +36,7 @@ pub fn router() -> Router<SharedState> {
 }
 
 /// An error the UI shows as is: `{"error": "..."}`.
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(pub StatusCode, pub String);
 
 impl ApiError {
     fn bad(msg: impl Into<String>) -> Self {
@@ -63,7 +63,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-type ApiResult<T> = Result<T, ApiError>;
+pub(crate) type ApiResult<T> = Result<T, ApiError>;
 
 fn device_or_404(state: &SharedState, id: i64) -> ApiResult<Device> {
     model::device(&state.db.conn(), id)?.ok_or(ApiError::not_found("device"))
@@ -224,9 +224,9 @@ async fn preview_png(State(s): State<SharedState>, Path(id): Path<i64>, Json(mut
 
 /// An app as the UI sees it.
 #[derive(Serialize)]
-struct AppOut {
+pub(crate) struct AppOut {
     #[serde(flatten)]
-    app: std::sync::Arc<AppMeta>,
+    pub(crate) app: std::sync::Arc<AppMeta>,
     instances: i64,
     /// The Lua a new instance starts with.
     config_template: String,
@@ -237,7 +237,7 @@ fn app_out(s: &SharedState, app: std::sync::Arc<AppMeta>) -> ApiResult<AppOut> {
     Ok(AppOut { config_template: app.config_template(), instances, app })
 }
 
-fn app_or_404(s: &SharedState, id: &str) -> ApiResult<std::sync::Arc<AppMeta>> {
+pub(crate) fn app_or_404(s: &SharedState, id: &str) -> ApiResult<std::sync::Arc<AppMeta>> {
     s.apps.get(id).ok_or(ApiError::not_found("app"))
 }
 
@@ -266,7 +266,7 @@ async fn reload_apps(State(s): State<SharedState>) -> ApiResult<Json<Vec<AppOut>
 }
 
 /// Saves a written app under a name no other app has, and loads it.
-fn store_app(s: &SharedState, mut a: StoredApp, rename_if_taken: bool) -> ApiResult<AppOut> {
+pub(crate) fn store_app(s: &SharedState, mut a: StoredApp, rename_if_taken: bool) -> ApiResult<AppOut> {
     a.name = a.name.trim().to_string();
     if a.name.is_empty() {
         return Err(ApiError::bad("an app needs a name"));
@@ -282,7 +282,7 @@ fn store_app(s: &SharedState, mut a: StoredApp, rename_if_taken: bool) -> ApiRes
     app_out(s, meta)
 }
 
-fn new_app_id() -> String {
+pub(crate) fn new_app_id() -> String {
     format!("u{}", model::random_hex(4))
 }
 
@@ -316,6 +316,7 @@ async fn new_app(State(s): State<SharedState>) -> ApiResult<Json<AppOut>> {
         code: NEW_APP_CODE.into(),
         validate_code: String::new(),
         validate_enabled: false,
+        prototype: false,
     };
     Ok(Json(store_app(&s, a, true)?))
 }
@@ -330,11 +331,21 @@ struct AppIn {
     validate_code: String,
     #[serde(default)]
     validate_enabled: bool,
+    /// Left out: unchanged.
+    prototype: Option<bool>,
 }
 
 async fn update_app(State(s): State<SharedState>, Path(id): Path<String>, Json(a): Json<AppIn>) -> ApiResult<Json<AppOut>> {
-    editable(&s, &id)?;
-    let a = StoredApp { id, name: a.name, description: a.description.trim().into(), code: a.code, validate_code: a.validate_code, validate_enabled: a.validate_enabled };
+    let old = editable(&s, &id)?;
+    let a = StoredApp {
+        id,
+        name: a.name,
+        description: a.description.trim().into(),
+        code: a.code,
+        validate_code: a.validate_code,
+        validate_enabled: a.validate_enabled,
+        prototype: a.prototype.unwrap_or(old.prototype),
+    };
     Ok(Json(store_app(&s, a, false)?))
 }
 
@@ -358,6 +369,7 @@ async fn fork_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiRe
         code: src.code.clone(),
         validate_code: src.validate_code.clone(),
         validate_enabled: src.validate_enabled,
+        prototype: false,
     };
     Ok(Json(store_app(&s, a, true)?))
 }
@@ -378,9 +390,9 @@ struct Exported {
 }
 const EXPORT_FORMAT: &str = "tephra-app";
 
-async fn export_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+/// An app as an export file: its name and contents (base64 text).
+pub(crate) fn export_file(a: &AppMeta) -> ApiResult<(String, String)> {
     use base64::Engine;
-    let a = app_or_404(&s, &id)?;
     let e = Exported {
         format: EXPORT_FORMAT.into(),
         version: 1,
@@ -392,7 +404,12 @@ async fn export_app(State(s): State<SharedState>, Path(id): Path<String>) -> Api
     };
     let data = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&e).map_err(anyhow::Error::from)?);
     let file: String = a.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
-    Ok(Json(json!({ "filename": format!("{}.tephra-app", file.trim_matches('-')), "data": data })))
+    Ok((format!("{}.tephra-app", file.trim_matches('-')), data))
+}
+
+async fn export_app(State(s): State<SharedState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let (filename, data) = export_file(&*app_or_404(&s, &id)?)?;
+    Ok(Json(json!({ "filename": filename, "data": data })))
 }
 
 #[derive(Deserialize)]
@@ -417,6 +434,7 @@ async fn import_app(State(s): State<SharedState>, Json(i): Json<ImportIn>) -> Ap
         code: e.code,
         validate_code: e.validate_code,
         validate_enabled: e.validate_enabled,
+        prototype: false,
     };
     Ok(Json(store_app(&s, a, true)?))
 }
@@ -459,6 +477,7 @@ async fn try_app(State(s): State<SharedState>, Path(id): Path<String>, Json(t): 
             code: t.code.unwrap_or_else(|| app.code.clone()),
             validate_code: t.validate_code.unwrap_or_else(|| app.validate_code.clone()),
             validate_enabled: t.validate_enabled.unwrap_or(app.validate_enabled),
+            prototype: false,
         })
     };
     let size = match t.size.as_str() {

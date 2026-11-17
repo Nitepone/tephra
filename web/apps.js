@@ -23,7 +23,7 @@ function instanceLink(i) { return href("apps", ["instance", i.id]); }
 
 function renderAppList() {
   const apps = S.apps.map(a => `<tr>
-      <td><a href="${appLink(a)}"><b>${esc(a.name)}</b></a> ${a.builtin ? `<span class="badge muted">built-in</span>` : ""}
+      <td><a href="${appLink(a)}"><b>${esc(a.name)}</b></a> ${a.builtin ? `<span class="badge muted">built-in</span>` : ""}${a.prototype ? `<span class="badge warn" title="Pushed by an agent through the developer API">prototype</span>` : ""}
         <div class="muted">${esc(a.description)}</div>${a.error ? `<div class="bad mono">${esc(a.error)}</div>` : ""}</td>
       <td>${a.has_fetch ? "every " + fmtDuration(a.refresh_s) : "no fetch"}</td>
       <td class="num">${a.instances}</td>
@@ -200,7 +200,7 @@ function showAppEditor(id) {
   $("apps-body").innerHTML = `
     <div class="page-head">
       <a href="${href("apps")}">Apps</a><span class="muted">/</span>
-      <h1>${esc(app.name)}</h1>${ro ? `<span class="badge muted">built-in</span>` : ""}
+      <h1>${esc(app.name)}</h1>${ro ? `<span class="badge muted">built-in</span>` : ""}${app.prototype ? `<span class="badge warn" id="app-proto-badge">prototype</span>` : ""}
       <span class="spacer"></span>
       <button type="button" id="app-fork">Create copy (fork)</button>
       <button type="button" id="app-export">Export</button>
@@ -212,6 +212,8 @@ function showAppEditor(id) {
       <form class="form" onsubmit="return false">
         <label for="app-name">Name</label><input type="text" id="app-name" value="${esc(app.name)}" size="40" ${ro ? "disabled" : ""}>
         <label for="app-desc">Description</label><input type="text" id="app-desc" value="${esc(app.description)}" size="80" ${ro ? "disabled" : ""}>
+        ${app.prototype ? `<label for="app-prototype">Prototype</label><label class="hint"><input type="checkbox" id="app-prototype" checked>
+          Pushed by an agent through the developer API. Untick and save to keep it as a finished app.</label>` : ""}
       </form>
     </div></div>
     <div class="panel">
@@ -241,6 +243,7 @@ function showAppEditor(id) {
   if (!ro) {
     $("app-name").oninput = dirty;
     $("app-desc").oninput = dirty;
+    if ($("app-prototype")) $("app-prototype").onchange = dirty;
   }
   $("app-fork").onclick = () => forkApp(app.id);
   $("app-export").onclick = () => exportApp(app.id);
@@ -254,12 +257,14 @@ function showAppEditor(id) {
       const saved = await apiSend("PUT", `/apps/${encodeURIComponent(app.id)}`, {
         name: $("app-name").value, description: $("app-desc").value, code: code.value,
         validate_code: check.value, validate_enabled: $("app-validate-on").checked,
+        ...($("app-prototype") ? { prototype: $("app-prototype").checked } : {}),
       });
       Object.assign(app, saved);
       $("app-dirty").hidden = true;
       $("app-error").hidden = !saved.error;
       setText("app-error", saved.error || "");
       document.querySelector("#apps-body h1").textContent = saved.name;
+      if ($("app-proto-badge")) $("app-proto-badge").hidden = !saved.prototype;
       toast(saved.error ? "Saved, but the code doesn't load. See the error under it." : "Saved.", saved.error ? "bad" : "ok");
     } catch (e) { toast(e.message, "bad"); }
   };

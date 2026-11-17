@@ -51,6 +51,8 @@ pub struct AppMeta {
     /// Lua that checks `config` (with `assert`/`error`) before the app runs.
     pub validate_code: String,
     pub validate_enabled: bool,
+    /// Pushed by an agent through the developer API, and marked so in the UI until someone unticks it.
+    pub prototype: bool,
     /// How often `fetch` runs; also the shortest refresh it asks of a device showing it.
     pub refresh_s: u64,
     pub settings: Vec<SettingField>,
@@ -412,6 +414,7 @@ fn builtin_meta(dir: &Path) -> AppMeta {
         builtin: true,
         code: String::new(),
         validate_enabled: validate.is_some(),
+        prototype: false,
         validate_code: validate.unwrap_or_default(),
         refresh_s: 900,
         settings: Vec::new(),
@@ -438,6 +441,7 @@ pub fn stored_meta(s: &StoredApp) -> AppMeta {
         code: s.code.clone(),
         validate_code: s.validate_code.clone(),
         validate_enabled: s.validate_enabled,
+        prototype: s.prototype,
         refresh_s: 900,
         settings: Vec::new(),
         has_fetch: false,
@@ -510,7 +514,7 @@ impl LuaFailure {
     }
 }
 
-fn short_error(e: &mlua::Error) -> String {
+pub fn short_error(e: &mlua::Error) -> String {
     // The message without the Rust-side traceback; Lua's own position is in the first line.
     let s = e.to_string();
     let mut s = s.split("\nstack traceback:").next().unwrap_or(&s).trim();
@@ -814,6 +818,7 @@ mod tests {
             code: code.into(),
             validate_code: String::new(),
             validate_enabled: false,
+            prototype: false,
         })
     }
 
@@ -919,6 +924,7 @@ mod tests {
             code: DEMO.into(),
             validate_code: String::new(),
             validate_enabled: false,
+            prototype: false,
         });
         assert_eq!(apps.copy_name("Clock"), "Clock Copy 2");
         assert_eq!(apps.copy_name("Clock Copy 1"), "Clock Copy 2");

@@ -266,10 +266,12 @@ pub struct StoredApp {
     pub validate_code: String,
     #[serde(default)]
     pub validate_enabled: bool,
+    #[serde(default)]
+    pub prototype: bool,
 }
 
 pub fn stored_apps(c: &Connection) -> rusqlite::Result<Vec<StoredApp>> {
-    let mut st = c.prepare("SELECT id, name, description, code, validate_code, validate_enabled FROM apps ORDER BY name")?;
+    let mut st = c.prepare("SELECT id, name, description, code, validate_code, validate_enabled, prototype FROM apps ORDER BY name")?;
     st.query_map([], |r| {
         Ok(StoredApp {
             id: r.get(0)?,
@@ -278,6 +280,7 @@ pub fn stored_apps(c: &Connection) -> rusqlite::Result<Vec<StoredApp>> {
             code: r.get(3)?,
             validate_code: r.get(4)?,
             validate_enabled: r.get(5)?,
+            prototype: r.get(6)?,
         })
     })?
     .collect()
@@ -287,11 +290,11 @@ pub fn stored_apps(c: &Connection) -> rusqlite::Result<Vec<StoredApp>> {
 pub fn save_app(c: &Connection, a: &StoredApp) -> rusqlite::Result<()> {
     let now = now_ms();
     c.execute(
-        "INSERT INTO apps (id, name, description, code, validate_code, validate_enabled, created_ms, updated_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+        "INSERT INTO apps (id, name, description, code, validate_code, validate_enabled, prototype, created_ms, updated_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?8, ?7, ?7)
          ON CONFLICT (id) DO UPDATE SET name = ?2, description = ?3, code = ?4, validate_code = ?5,
-             validate_enabled = ?6, updated_ms = ?7",
-        params![a.id, a.name, a.description, a.code, a.validate_code, a.validate_enabled, now],
+             validate_enabled = ?6, prototype = ?8, updated_ms = ?7",
+        params![a.id, a.name, a.description, a.code, a.validate_code, a.validate_enabled, now, a.prototype],
     )?;
     Ok(())
 }

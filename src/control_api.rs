@@ -121,6 +121,7 @@ struct DevicePatch {
     /// Placeholders only: a registered device reports its own size.
     width: Option<u32>,
     height: Option<u32>,
+    grays: Option<u8>,
 }
 
 const BUTTON_FUNCTIONS: &[&str] = &["identify", "send_to_me", "add_wifi", "none"];
@@ -137,12 +138,15 @@ async fn update_device(State(s): State<SharedState>, Path(id): Path<i64>, Json(p
     {
         return Err(ApiError::bad(format!("button: one of {}", BUTTON_FUNCTIONS.join(", "))));
     }
+    if p.grays.is_some_and(|g| g != 2 && g != 4) {
+        return Err(ApiError::bad("grays: 2 or 4"));
+    }
     if (p.width.is_some() || p.height.is_some()) && !d.placeholder {
         return Err(ApiError::bad("a connected device reports its own size"));
     }
     let c = s.db.conn();
     c.execute(
-        "UPDATE devices SET name = ?, refresh_min_s = ?, refresh_max_s = ?, button = ?, width = ?, height = ? WHERE id = ?",
+        "UPDATE devices SET name = ?, refresh_min_s = ?, refresh_max_s = ?, button = ?, width = ?, height = ?, grays = ? WHERE id = ?",
         rusqlite::params![
             p.name.as_deref().map(str::trim).unwrap_or(&d.name),
             min,
@@ -150,6 +154,7 @@ async fn update_device(State(s): State<SharedState>, Path(id): Path<i64>, Json(p
             p.button.as_deref().unwrap_or(&d.button),
             p.width.unwrap_or(d.width),
             p.height.unwrap_or(d.height),
+            p.grays.unwrap_or(d.grays),
             id
         ],
     )?;
@@ -453,6 +458,11 @@ struct TryIn {
     width: u32,
     #[serde(default = "og_h")]
     height: u32,
+    #[serde(default = "two")]
+    grays: u8,
+}
+fn two() -> u8 {
+    2
 }
 fn full() -> String {
     "full".into()
@@ -487,7 +497,7 @@ async fn try_app(State(s): State<SharedState>, Path(id): Path<String>, Json(t): 
         _ => "full",
     };
     let (w, h) = (t.width.clamp(100, 4000), t.height.clamp(100, 4000));
-    Ok(png(display::try_app(&s, meta, t.config, w, h, size).await?))
+    Ok(png(display::try_app(&s, meta, t.config, w, h, size, t.grays).await?))
 }
 
 // ---- instances ----

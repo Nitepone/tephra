@@ -20,7 +20,7 @@ pub struct Draft {
     pub configs: HashMap<i64, String>,
 }
 
-/// The device's screen as a 1-bit PNG.
+/// The device's screen as the PNG it downloads.
 pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draft>) -> anyhow::Result<Vec<u8>> {
     let draft = draft.unwrap_or_default();
     let (cfg, instances) = {
@@ -59,14 +59,14 @@ pub async fn render_png(state: &SharedState, device: &Device, draft: Option<Draf
                 let content = match state.apps.get(&inst.app) {
                     None => Err(format!("the app {:?} is not installed", inst.app)),
                     Some(app) => {
-                        let slot = Slot { w: g.content.w, h: g.content.h, size: g.size };
+                        let slot = Slot { w: g.content.w, h: g.content.h, size: g.size, grays: device.grays };
                         apps::render(&app, &inst.config, &inst.data, slot, &state.cfg.data_dir)
                     }
                 };
                 SlotDraw { geom: *g, content: Some(content), title: inst.name.clone() }
             })
             .collect();
-        screen::compose(device.width, device.height, p.slots.len() > 1, &slots).to_png()
+        screen::compose(device.width, device.height, device.grays, p.slots.len() > 1, &slots).to_device_png(crate::render::OG_IMAGE_LIMIT)
     })
     .await?
 }
@@ -202,7 +202,7 @@ fn prune_images(state: &SharedState) {
 
 /// One app drawn alone on a panel of the given size, for the app editor: its config is run,
 /// then (if the app has one) its fetch, then its render. Nothing is stored.
-pub async fn try_app(state: &SharedState, app: apps::AppMeta, config: String, w: u32, h: u32, size: &'static str) -> anyhow::Result<Vec<u8>> {
+pub async fn try_app(state: &SharedState, app: apps::AppMeta, config: String, w: u32, h: u32, size: &'static str, grays: u8) -> anyhow::Result<Vec<u8>> {
     let data_dir = state.cfg.data_dir.clone();
     tokio::task::spawn_blocking(move || {
         let p = match size {
@@ -216,11 +216,11 @@ pub async fn try_app(state: &SharedState, app: apps::AppMeta, config: String, w:
         let g = geoms[0];
         let content = (|| {
             let data = if app.has_fetch { apps::fetch(&app, &config, &data_dir)? } else { serde_json::Value::Null };
-            apps::render(&app, &config, &data, Slot { w: g.content.w, h: g.content.h, size: g.size }, &data_dir)
+            apps::render(&app, &config, &data, Slot { w: g.content.w, h: g.content.h, size: g.size, grays }, &data_dir)
         })();
         let mut slots = vec![SlotDraw { geom: g, content: Some(content), title: app.name.clone() }];
         slots.extend(geoms[1..].iter().map(|g| SlotDraw { geom: *g, content: None, title: String::new() }));
-        screen::compose(w, h, p.slots.len() > 1, &slots).to_png()
+        screen::compose(w, h, grays, p.slots.len() > 1, &slots).to_device_png(crate::render::OG_IMAGE_LIMIT)
     })
     .await?
 }

@@ -24,11 +24,13 @@ pub struct Device {
     pub refresh_min_s: u32,
     pub refresh_max_s: u32,
     pub button: String,
+    /// 2: black and white, fast refresh. 4: also two grays, a full refresh whenever gray is shown.
+    pub grays: u8,
     pub placeholder: bool,
 }
 
 const DEVICE_COLS: &str = "id, mac, api_key, friendly_id, name, model, width, height, firmware, battery_v, rssi, \
-     last_seen_ms, created_ms, refresh_min_s, refresh_max_s, button";
+     last_seen_ms, created_ms, refresh_min_s, refresh_max_s, button, grays";
 
 fn device_row(r: &Row) -> rusqlite::Result<Device> {
     let mac: Option<String> = r.get(1)?;
@@ -50,6 +52,7 @@ fn device_row(r: &Row) -> rusqlite::Result<Device> {
         refresh_min_s: r.get(13)?,
         refresh_max_s: r.get(14)?,
         button: r.get(15)?,
+        grays: r.get(16)?,
     })
 }
 

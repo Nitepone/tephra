@@ -107,6 +107,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql("ALTER TABLE instances DROP COLUMN settings;"),
     // 3: apps pushed by an agent through the developer API.
     Migration::Sql("ALTER TABLE apps ADD COLUMN prototype INTEGER NOT NULL DEFAULT 0;"),
+    // 4: how many grays a device's screen is drawn with (2 or 4).
+    Migration::Sql("ALTER TABLE devices ADD COLUMN grays INTEGER NOT NULL DEFAULT 2;"),
 ];
 
 /// Rewrites each instance's JSON settings as the equivalent Lua config.

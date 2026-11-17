@@ -49,6 +49,9 @@
 -- @tfield int h Height in pixels.
 -- @tfield string size `"full"` (the whole screen), `"large"` (two thirds), `"half"` or `"small"`
 -- (a third, a quarter, or a sixth). Use it to show less in small slots.
+-- @tfield int grays 2 (black and white) or 4 (also dark and light gray), by the device's
+-- **Grays** setting. Images and text use the grays there are on their own; check it only to
+-- choose differently, such as a photo only when it can be shown in gray.
 
 --- Gets the app's data. Optional.
 --

@@ -15,7 +15,11 @@
 -- share the space left over; otherwise `justify` places them. Across the axis, `align` places
 -- each child, stretching it to the full width (or height) by default.
 --
--- Everything is drawn in pure black and white: text is crisp, images are dithered.
+-- A screen has 2 grays (black and white) or 4 (also dark and light gray), by the device's
+-- **Grays** setting; `slot.grays` says which. Text edges are shaded gray, and images are
+-- dithered to the grays there are. A device whose screen shows gray does a full refresh (the
+-- panel flashes); one in black and white only, a fast one. To keep a 4-gray device's text-only
+-- screens black and white, set `smooth = false` on their text.
 -- @module ui
 
 local ui = {}
@@ -68,16 +72,21 @@ function ui.box(t) end
 -- @{measure} name such characters. Text is put in Unicode's composed form first, so a letter
 -- followed by a separate accent is drawn as the accented letter.
 --
--- Text is drawn crisp: each pixel is black or white by how much of it the letter covers. With
--- `smooth`, the edges are dithered instead, which softens the curves of large text (about 60 px
--- and up) but makes small text grainy.
+-- Text is smooth by default. On a screen with 4 grays, the edges of letters are shaded gray,
+-- which suits text of any size. With 2 grays, text of 60 px and up has its edges dithered,
+-- which softens its curves, and smaller text is drawn crisp: each pixel black or white by how
+-- much of it the letter covers, as dithering would make it grainy.
+--
+-- `smooth = false` draws text crisp everywhere. `smooth = true` dithers it with 2 grays even
+-- when small.
 -- @tparam table t The text (a string or a number), then options:
 -- @tparam[opt="body"] string t.style One of the styles above.
 -- @tparam[opt] number t.size A size in pixels instead of the style's.
 -- @tparam[opt] bool t.bold Bold or not, instead of the style's.
 -- @tparam[opt="sans"] string t.font `"sans"`, `"serif"`, `"mono"` or `"overpass"`.
 -- @tparam[opt=false] bool t.italic Italic, for `serif`.
--- @tparam[opt=false] bool t.smooth Dither the edges, for large text.
+-- @tparam[opt] bool t.smooth `false` for crisp text; `true` to dither small text too with 2
+-- grays. Left out: smooth as above.
 -- @tparam[opt] string t.fit `"shrink"`: use the largest size, from the style's (or `size`) down
 -- to `min_size`, at which the text fits its space without being cut: no "…", no lines left
 -- out, no words broken. If none fits, `min_size`, cut as usual.
@@ -92,14 +101,15 @@ function ui.box(t) end
 -- @usage ui.text { "08:00", font = "mono", bold = true }
 function ui.text(t) end
 
---- An image, scaled to its space and dithered to black and white.
+--- An image, scaled to its space and dithered to the screen's grays.
 --
 -- PNG, JPEG, GIF and WebP work. Transparent areas become white.
 -- @tparam table t The source, then options. The source is a reference from @{globals.blob},
 -- or, for built-in apps only, a file in the app's directory.
 -- @tparam[opt="contain"] string t.fit `"contain"` shows all of it; `"cover"` fills the space
 -- and crops the edges.
--- @tparam[opt=true] bool t.dither Dither for photos; turn off for line art and text.
+-- @tparam[opt=true] bool t.dither Dither for photos; turn off for line art and text, which
+-- then take the nearest gray.
 -- @treturn Node
 -- @usage ui.image { data.photo, fit = "cover", grow = 1 }
 function ui.image(t) end

@@ -171,6 +171,8 @@ pub struct Slot {
     pub w: i32,
     pub h: i32,
     pub size: &'static str,
+    /// 2 or 4: how many grays the screen has.
+    pub grays: u8,
 }
 
 const MEMORY_LIMIT: usize = 64 << 20;
@@ -745,7 +747,7 @@ fn node_from_lua(v: &Value, ctx: &NodeCtx) -> Result<Node, String> {
                 style.face = Face::parse(&f).ok_or_else(|| format!("unknown font {f:?}: use {}", Face::NAMES))?;
             }
             style.italic = get_b("italic").unwrap_or(false);
-            style.smooth = get_b("smooth").unwrap_or(false);
+            style.smooth = get_b("smooth");
             let shrink_to = match get_s("fit").as_deref() {
                 None => None,
                 Some("shrink") => Some(get_f("min_size").unwrap_or(10.0).clamp(6.0, style.size)),
@@ -840,7 +842,7 @@ mod tests {
     }
 
     fn slot() -> Slot {
-        Slot { w: 400, h: 300, size: "half" }
+        Slot { w: 400, h: 300, size: "half", grays: 2 }
     }
 
     #[test]

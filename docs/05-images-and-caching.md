@@ -108,8 +108,8 @@ Model strings sent by the device differ from the names TRMNL's cloud uses in htt
 | `x` | TRMNL X (ESP32-S3 + C5 modem) | 1872x1404 | 16 grays | PNG, JPEG (no BMP) | 750,000 |
 | `xteink_x4` | Xteink X4 | 800x480 | 1-bit / 4 gray | PNG, JPEG, BMP | 90,000 |
 | `xteink_x3` | Xteink X3 | 792x528 | 1-bit / 4 gray | PNG, JPEG | 90,000 |
-| `seeed_esp32c3` / `seeed_esp32s3` | XIAO ESP32 + 7.5" panel | 800x480 | 1-bit | PNG, JPEG, BMP | 90,000 / 750,000 |
-| `xiao_epaper_display` | TRMNL 7.5" DIY kit | 800x480 | 1-bit | PNG, JPEG, BMP | 750,000 |
+| `seeed_esp32c3` / `seeed_esp32s3` | XIAO ESP32 + 7.5" panel | 800x480 | 1-bit; 4 gray with 2-bit PNG (EPD_75, as `og`) | PNG, JPEG, BMP | 90,000 / 750,000 |
+| `xiao_epaper_display` | TRMNL 7.5" DIY kit | 800x480 | 1-bit; 4 gray with 2-bit PNG (EPD_75, as `og`) | PNG, JPEG, BMP | 750,000 |
 | `xiao_epaper_mini` | 4.26" DIY kit | 800x480 | 1-bit / 4 gray | PNG, JPEG | 750,000 |
 | `xiao_epaper_3clr` | 7.5" black/white/red kit | 800x480 | 3 colours | PNG | 750,000 (colour handling **Unverified**) |
 | `xiao_epaper_6clr` | 7.3" Spectra 6 kit | 800x480 | 6 colours | PNG | 750,000 |
@@ -119,7 +119,7 @@ Model strings sent by the device differ from the names TRMNL's cloud uses in htt
 | `reterminal_e1004` | Seeed reTerminal E1004 | 1200x1600 per firmware test profile (TRMNL's model list says 1600x1200) | Spectra 6 | PNG | 750,000 |
 | `seeed_sticky` | Seeed Sticky | 800x480 | 1-bit / 4 gray | PNG, JPEG | 750,000 |
 | `waveshare_397` | Waveshare 3.97" | 800x480 | 1-bit / 4 gray | PNG, JPEG | 750,000 |
-| `waveshare` | generic Waveshare ESP32 driver board | 800x480 (EPD_75) | 1-bit | PNG, JPEG, BMP | 90,000 |
+| `waveshare` | generic Waveshare ESP32 driver board | 800x480 (EPD_75) | 1-bit; 4 gray with 2-bit PNG (EPD_75, as `og`) | PNG, JPEG, BMP | 90,000 |
 | `crowpanel42` | CrowPanel 4.2" | 400x300 | 1-bit / 4 gray | PNG | 90,000 |
 | `m5_paper_mono` | M5Paper | **Unverified** (test profile says 800x480; real panel is 960x540) | mono | PNG | 90,000 |
 | `m5_paper_color` | M5Paper Color | 400x600 | Spectra 6 | PNG | 750,000 |

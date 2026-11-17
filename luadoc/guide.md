@@ -78,7 +78,10 @@ or `"small"` (see @{app.Slot}). Show less in small slots:
 
 Measure instead of guessing what fits: @{ui.measure} gives the size text (or any node) will
 take before drawing it, and `fit = "shrink"` on @{ui.text} picks the largest size that fits.
-The panel is black and white. Text is drawn crisp; images are dithered.
+The panel shows 2 grays (black and white) or, if the device's **Grays** setting is 4, also
+dark and light gray; `slot.grays` says which. Text gets smooth edges (shaded with 4 grays;
+with 2, dithered when large and crisp when small) and images are dithered to the grays there
+are. `smooth = false` on @{ui.text} keeps text crisp.
 
 ## Dates and times
 

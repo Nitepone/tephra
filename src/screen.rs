@@ -92,8 +92,8 @@ pub struct SlotDraw {
     pub title: String,
 }
 
-pub fn compose(w: u32, h: u32, multi: bool, slots: &[SlotDraw]) -> Canvas {
-    let mut cv = Canvas::new(w, h);
+pub fn compose(w: u32, h: u32, grays: u8, multi: bool, slots: &[SlotDraw]) -> Canvas {
+    let mut cv = Canvas::new(w, h).with_grays(grays);
     compose_into(&mut cv, multi, slots);
     cv
 }

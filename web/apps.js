@@ -162,6 +162,7 @@ function tryPanel(title) {
     <div class="panel-body try-box">
       <div class="stack">
         <div class="toolbar"><label>Size <select id="try-size">${sizes}</select></label>
+          <label>Grays <select id="try-grays"><option value="2">2</option><option value="4">4</option></select></label>
           <button type="button" id="try-run" class="primary">Run</button><span class="muted" id="try-note"></span></div>
         <div id="try-config-box"></div>
       </div>
@@ -270,7 +271,7 @@ function showAppEditor(id) {
   };
   if ($("app-revert")) $("app-revert").onclick = () => showAppEditor(id);
   $("try-run").onclick = () => runTry(app.id, {
-    config: config.value, size: $("try-size").value,
+    config: config.value, size: $("try-size").value, grays: Number($("try-grays").value),
     ...(ro ? {} : { code: code.value, validate_code: check.value, validate_enabled: $("app-validate-on").checked }),
   });
 }
@@ -351,6 +352,6 @@ function showInstanceEditor(id) {
   };
   if (app) {
     $("try-config-box").innerHTML = `<p class="hint">Uses the config above, saved or not.</p>`;
-    $("try-run").onclick = () => runTry(app.id, { config: config.value, size: $("try-size").value });
+    $("try-run").onclick = () => runTry(app.id, { config: config.value, size: $("try-size").value, grays: Number($("try-grays").value) });
   }
 }

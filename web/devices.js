@@ -44,6 +44,13 @@ function renderDeviceDetail(r, force) {
         <label for="dev-min">Refresh</label>
         <span>every <input type="number" id="dev-min" value="${d.refresh_min_s / 60}" min="1"> to <input type="number" id="dev-max" value="${d.refresh_max_s / 60}" min="1"> minutes
           <p class="hint">The device wakes as often as its most frequent app asks, within these bounds. Shorter drains the battery faster.</p></span>
+        <label for="dev-grays">Grays</label>
+        <span><select id="dev-grays">
+            <option value="2" ${d.grays === 4 ? "" : "selected"}>2: black and white</option>
+            <option value="4" ${d.grays === 4 ? "selected" : ""}>4: black, dark gray, light gray, white</option></select>
+          <p class="hint">With 4, text gets gray edges and photos are dithered to four levels. A screen showing gray
+            makes the display flash on every refresh (a full refresh), and needs firmware 1.6.0 or later. Apps can keep text
+            black and white with <code>smooth = false</code>. A gray screen too large for the device to download is sent black and white.</p></span>
         ${d.placeholder ? "" : `<label for="dev-button">Double-click</label><select id="dev-button">${buttons}</select>`}
       </form>
       <div class="form-actions">
@@ -60,11 +67,11 @@ function renderDeviceDetail(r, force) {
 function renderFacts(d) {
   const row = (k, v) => `<dt>${esc(k)}</dt><dd>${v}</dd>`;
   const facts = d.placeholder
-    ? row("Kind", "Placeholder: designed here, not connected to a device") + row("Display", `${d.width}×${d.height}`)
+    ? row("Kind", "Placeholder: designed here, not connected to a device") + row("Display", `${d.width}×${d.height}, ${d.grays} grays`)
     : row("MAC", `<span class="mono">${esc(d.mac)}</span>`) +
       row("Friendly ID", `<span class="mono">${esc(d.friendly_id)}</span>`) +
       row("Model", esc(d.model || "unknown")) +
-      row("Display", `${d.width}×${d.height}`) +
+      row("Display", `${d.width}×${d.height}, ${d.grays} grays`) +
       row("Firmware", esc(d.firmware || "unknown")) +
       row("Battery", d.battery_v != null ? `${d.battery_v.toFixed(2)} V` : "unknown") +
       row("Wi-Fi", d.rssi != null ? `${d.rssi} dBm` : "unknown") +
@@ -78,6 +85,7 @@ async function saveDevice(d) {
     name: $("dev-name").value,
     refresh_min_s: Math.round(Number($("dev-min").value) * 60),
     refresh_max_s: Math.round(Number($("dev-max").value) * 60),
+    grays: Number($("dev-grays").value),
   };
   if ($("dev-button")) body.button = $("dev-button").value;
   if ($("dev-w")) { body.width = Number($("dev-w").value); body.height = Number($("dev-h").value); }

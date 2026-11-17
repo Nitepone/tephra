@@ -69,6 +69,9 @@ fn font(face: Face, bold: bool, italic: bool) -> &'static FontRef<'static> {
         .expect("Noto Sans is bundled")
 }
 
+/// Below this size, 2-gray text stays crisp unless `smooth` is asked for: dithered edges make it grainy.
+pub const SMOOTH_MIN_SIZE: f32 = 60.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
     /// The line's height in pixels (ascent plus descent).
@@ -76,8 +79,9 @@ pub struct TextStyle {
     pub bold: bool,
     pub italic: bool,
     pub face: Face,
-    /// Dither the edges instead of thresholding them: softer curves for large text.
-    pub smooth: bool,
+    /// Soften the edges: shaded with 4 grays, dithered with 2. `None` (the default) does so with
+    /// 4 grays, and with 2 only for text of `SMOOTH_MIN_SIZE` and up, where dithering helps.
+    pub smooth: Option<bool>,
 }
 
 /// One glyph placed on a line.
@@ -124,7 +128,7 @@ impl TextStyle {
             "huge" => (96.0, true),
             _ => return None,
         };
-        Some(Self { size, bold, italic: false, face: Face::Sans, smooth: false })
+        Some(Self { size, bold, italic: false, face: Face::Sans, smooth: None })
     }
 
     fn primary(&self) -> &'static FontRef<'static> {
@@ -251,7 +255,7 @@ impl TextStyle {
     }
 
     /// Draws one line with its top at `y`. Glyph coverage is thresholded, so text stays crisp;
-    /// with `smooth`, it is dithered instead.
+    /// when smooth (see `smooth`), the edges are shaded on a canvas with 4 grays, else dithered.
     pub fn draw(&self, c: &mut Canvas, x: f32, y: f32, text: &str, ink: u8) {
         let baseline = y + self.ascent();
         let outlines: Vec<_> = self
@@ -260,7 +264,8 @@ impl TextStyle {
             .into_iter()
             .filter_map(|p| p.font.outline_glyph(p.id.with_scale_and_position(p.scale, point(x + p.x, baseline))))
             .collect();
-        if !self.smooth {
+        let smooth = self.smooth.unwrap_or(c.grays >= 4 || self.size >= SMOOTH_MIN_SIZE);
+        if !smooth {
             for o in &outlines {
                 let b = o.px_bounds();
                 o.draw(|gx, gy, cov| {
@@ -293,6 +298,21 @@ impl TextStyle {
                     *cell = (*cell + v).min(1.0);
                 }
             });
+        }
+        if c.grays >= 4 {
+            // Enough grays to shade the edges instead of dithering them.
+            for j in 0..h {
+                for i in 0..w {
+                    let a = cov[j * w + i];
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    let (px, py) = (x0 + i as i32, y0 + j as i32);
+                    let v = ink as f32 * a + c.get_or_white(px, py) as f32 * (1.0 - a);
+                    c.set(px, py, c.quantize(v));
+                }
+            }
+            return;
         }
         for j in 0..h {
             for i in 0..w {
@@ -380,5 +400,44 @@ mod tests {
         st.draw(&mut cv, 10.0, 10.0, &c.to_string(), super::super::BLACK);
         let ink = (0..60).flat_map(|y| (0..200).map(move |x| (x, y))).filter(|&(x, y)| cv.get(x, y) == 0).count();
         assert!(ink > 20, "the arrow was drawn ({ink} pixels)");
+    }
+
+    #[test]
+    fn text_is_smooth_by_default_where_it_helps() {
+        let shade = |style: &str, smooth: Option<bool>, grays: u8| {
+            let mut st = TextStyle::named(style).unwrap();
+            st.smooth = smooth;
+            let mut cv = Canvas::new(400, 120).with_grays(grays);
+            st.draw(&mut cv, 10.0, 10.0, "Smooth", super::super::BLACK);
+            let crisp = {
+                let mut c = Canvas::new(400, 120).with_grays(grays);
+                st.smooth = Some(false);
+                st.draw(&mut c, 10.0, 10.0, "Smooth", super::super::BLACK);
+                c
+            };
+            (0..120).any(|y| (0..400).any(|x| cv.get(x, y) != crisp.get(x, y)))
+        };
+        // 4 grays: shaded at any size, unless turned off.
+        assert!(shade("body", None, 4));
+        assert!(!shade("body", Some(false), 4));
+        // 2 grays: dithered only when large, or when asked.
+        assert!(!shade("body", None, 2));
+        assert!(shade("huge", None, 2));
+        assert!(shade("body", Some(true), 2));
+        assert!(!shade("huge", Some(false), 2));
+    }
+
+    #[test]
+    fn smooth_text_is_shaded_only_with_four_grays() {
+        let mut st = TextStyle::named("large").unwrap();
+        st.smooth = Some(true);
+        let mut two = Canvas::new(300, 80);
+        st.draw(&mut two, 10.0, 10.0, "Smooth", super::super::BLACK);
+        assert!(!two.has_gray());
+        let mut four = Canvas::new(300, 80).with_grays(4);
+        st.draw(&mut four, 10.0, 10.0, "Smooth", super::super::BLACK);
+        assert!(four.has_gray());
+        let levels: std::collections::BTreeSet<u8> = (0..80).flat_map(|y| (0..300).map(move |x| (x, y))).map(|(x, y)| four.get(x, y)).collect();
+        assert!(levels.iter().all(|v| [0, 85, 170, 255].contains(v)), "{levels:?}");
     }
 }

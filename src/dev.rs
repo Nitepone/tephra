@@ -23,8 +23,7 @@ use std::time::Instant;
 
 const RENDER_LIMIT_MS: u64 = 2_000;
 const FETCH_LIMIT_MS: u64 = 60_000;
-/// The largest image an OG (no PSRAM) will download.
-const OG_IMAGE_LIMIT: usize = 90_000;
+use crate::render::OG_IMAGE_LIMIT;
 const SIZES: [&str; 4] = ["full", "large", "half", "small"];
 
 pub fn router() -> Router<SharedState> {
@@ -145,8 +144,14 @@ struct RenderIn {
     /// Draw the slot's title bar, as on a device. Changes the space the app gets.
     #[serde(default = "yes")]
     title_bar: bool,
+    /// 2 (black and white) or 4, as a device's Grays setting.
+    #[serde(default = "two")]
+    grays: u8,
     #[serde(default)]
     format: Option<String>,
+}
+fn two() -> u8 {
+    2
 }
 fn og_w() -> u32 {
     800
@@ -177,6 +182,8 @@ struct RenderReport {
     /// The things in `layout` (and elsewhere) worth a look, in words.
     problems: Vec<String>,
     png_bytes: usize,
+    /// 1, or 2 when the screen shows gray (and fits the OG's limit as 2-bit).
+    png_bits: u8,
     /// The device image, base64 PNG. Left out with `format=png`.
     #[serde(skip_serializing_if = "Option::is_none")]
     png: Option<String>,
@@ -205,16 +212,16 @@ fn preset_for(size: &str) -> &'static screen::Preset {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static str, w: u32, h: u32, title_bar: bool, data_dir: &std::path::Path) -> RenderReport {
+fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static str, w: u32, h: u32, grays: u8, title_bar: bool, data_dir: &std::path::Path) -> RenderReport {
     let p = preset_for(size);
     let bars: Vec<bool> = (0..p.slots.len()).map(|i| i == 0 && title_bar).collect();
     let geoms = screen::geometry(p, w, h, &bars);
     let g = geoms[0];
     let t = Instant::now();
-    let result = apps::render_detailed(meta, config, data, Slot { w: g.content.w, h: g.content.h, size: g.size }, data_dir);
+    let result = apps::render_detailed(meta, config, data, Slot { w: g.content.w, h: g.content.h, size: g.size, grays }, data_dir);
     let ms = t.elapsed().as_millis() as u64;
 
-    let mut cv = Canvas::new(w, h);
+    let mut cv = Canvas::new(w, h).with_grays(grays);
     let frames: Vec<SlotDraw> = geoms.iter().enumerate().map(|(i, g)| SlotDraw { geom: *g, content: None, title: if i == 0 { "App".into() } else { String::new() } }).collect();
     screen::compose_into(&mut cv, p.slots.len() > 1, &frames);
     let mut problems = Vec::new();
@@ -248,7 +255,14 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
     if ms * 2 > RENDER_LIMIT_MS {
         problems.push(format!("render took {ms} ms of its {RENDER_LIMIT_MS} ms limit"));
     }
-    let png = cv.to_png().unwrap_or_default();
+    let png = cv.to_device_png(OG_IMAGE_LIMIT).unwrap_or_default();
+    let png_bits = if cv.has_gray() && png.len() > 25 && png[24] == 2 { 2 } else { 1 };
+    if cv.has_gray() && png_bits == 1 {
+        let gray_bytes = cv.to_png().map(|p| p.len()).unwrap_or_default();
+        problems.push(format!(
+            "the gray screen is {gray_bytes} bytes as a 2-bit image, more than an OG accepts ({OG_IMAGE_LIMIT}); it is sent dithered to black and white instead"
+        ));
+    }
     if png.len() > OG_IMAGE_LIMIT {
         problems.push(format!("the image is {} bytes; an OG accepts at most {OG_IMAGE_LIMIT}", png.len()));
     }
@@ -262,6 +276,7 @@ fn render_one(meta: &apps::AppMeta, config: &str, data: &Value, size: &'static s
         layout,
         problems,
         png_bytes: png.len(),
+        png_bits,
         png: Some(base64::engine::general_purpose::STANDARD.encode(&png)),
         canvas: Some(cv),
     }
@@ -274,7 +289,7 @@ fn sheet(renders: &[RenderReport], w: u32, h: u32) -> Canvas {
     let (w, h) = (w as i32, h as i32);
     let cols = renders.len().min(2) as i32;
     let rows = (renders.len() as i32 + 1) / 2;
-    let mut out = Canvas::new((cols * w + (cols + 1) * GAP) as u32, (rows * (h + LABEL + GAP) + GAP) as u32);
+    let mut out = Canvas::new((cols * w + (cols + 1) * GAP) as u32, (rows * (h + LABEL + GAP) + GAP) as u32).with_grays(4);
     for (i, r) in renders.iter().enumerate() {
         let (cx, cy) = (i as i32 % 2, i as i32 / 2);
         let x = GAP + cx * (w + GAP);
@@ -298,6 +313,9 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
     if !(100..=4000).contains(&req.w) || !(100..=4000).contains(&req.h) {
         return bad("w and h: 100 to 4000 pixels".into());
     }
+    if req.grays != 2 && req.grays != 4 {
+        return bad("grays: 2 or 4".into());
+    }
     let png_out = q.format.or(req.format.clone()).as_deref() == Some("png");
     let meta = req.app.meta();
     if let Some(r) = load_failure(&meta) {
@@ -313,7 +331,7 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
             }
             (None, false) => (Value::Null, None),
         };
-        let renders: Vec<RenderReport> = sizes.iter().map(|size| render_one(&meta, &req.app.config, &data, size, req.w, req.h, req.title_bar, &data_dir)).collect();
+        let renders: Vec<RenderReport> = sizes.iter().map(|size| render_one(&meta, &req.app.config, &data, size, req.w, req.h, req.grays, req.title_bar, &data_dir)).collect();
         (fetch, renders, req.w, req.h)
     })
     .await;
@@ -324,7 +342,7 @@ async fn render(State(s): State<SharedState>, Query(q): Query<FormatQuery>, Json
 
     if png_out && !failed {
         let png = if renders.len() == 1 {
-            renders[0].canvas.as_ref().and_then(|c| c.to_png().ok())
+            renders[0].canvas.as_ref().and_then(|c| c.to_device_png(OG_IMAGE_LIMIT).ok())
         } else {
             sheet(&renders, w, h).to_png().ok()
         };

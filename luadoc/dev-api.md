@@ -38,6 +38,9 @@ sizes. Besides the app, it takes:
 - `w`, `h`: the panel, 800 × 480 by default.
 - `title_bar`: draw the slot's title bar, as most slots on a device have (default `true`). It
   takes 30 pixels from the app.
+- `grays`: `2` (the default) or `4`, as a device's **Grays** setting. With `4`, the image is a
+  2-bit PNG when anything on it is gray, and `png_bits` in the report says which it was. A
+  2-bit image larger than an OG accepts is sent as 1-bit, dithered, and `problems` says so.
 - `format`: `"png"` for an image instead of the JSON report (also `?format=png`). One size gives
   the device image; several give a sheet of them, labelled. If anything fails, the answer is the
   JSON report instead, with status `422`.
@@ -67,7 +70,7 @@ size, the other slots empty.
         "size": "half",
         "slot": { "x": 24, "y": 24, "w": 356, "h": 402 },
         "ms": 3, "limit_ms": 2000,
-        "png_bytes": 3181,
+        "png_bytes": 3181, "png_bits": 1,
         "png": "iVBORw0…",
         "problems": [
           "root/2/1 text \"Max Verstappen\": too_wide"

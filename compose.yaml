@@ -1,0 +1,10 @@
+services:
+  tephra:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8374:8374"
+    volumes:
+      - ./data:/app/data
+      # Optional: your own settings (public_url, timezone). Copy tephra.example.toml to start.
+      # - ./tephra.toml:/app/tephra.toml:ro

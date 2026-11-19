@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in - tephra</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .signin { max-width: 22em; margin: 12vh auto 0; padding: 0 16px; }
+  .signin .form { grid-template-columns: max-content minmax(0, 1fr); }
+  .signin input { width: 100%; }
+</style>
+</head>
+<body>
+<main class="signin">
+  <div class="panel">
+    <div class="panel-head"><h2>Sign in to tephra</h2></div>
+    <div class="panel-body">
+      <form class="form" id="f">
+        <label for="name">Name</label><input type="text" id="name" autocomplete="username" required autofocus>
+        <label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required>
+      </form>
+      <div class="form-actions">
+        <button type="submit" form="f" class="primary">Sign in</button>
+        <span class="form-msg" id="msg" role="alert"></span>
+      </div>
+    </div>
+  </div>
+  <p class="muted">Locked out? Run <code>tephra --unlock</code> on the server.</p>
+</main>
+<script>
+"use strict";
+// Back to the page that sent us here; only a path on this server.
+const next = new URLSearchParams(location.search).get("next") || "/";
+const safeNext = /^\/(?![\/\\])/.test(next) ? next : "/";
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault();
+  const msg = document.getElementById("msg");
+  msg.textContent = "Signing in…";
+  try {
+    const r = await fetch("/api/v1/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: document.getElementById("name").value, password: document.getElementById("password").value }),
+    });
+    if (r.ok) { location.replace(safeNext); return; }
+    msg.textContent = (await r.json().catch(() => ({}))).error || `${r.status} ${r.statusText}`;
+  } catch (err) { msg.textContent = "The server cannot be reached."; }
+};
+</script>
+</body>
+</html>

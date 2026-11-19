@@ -35,7 +35,7 @@ fn telemetry(h: &HeaderMap) -> Telemetry {
 }
 
 /// Where devices reach this server: the configured address, or the Host they used.
-fn base_url(state: &SharedState, h: &HeaderMap) -> String {
+pub fn base_url(state: &SharedState, h: &HeaderMap) -> String {
     let url = state.cfg.public_url.trim_end_matches('/');
     if !url.is_empty() {
         return url.to_string();
@@ -56,10 +56,14 @@ async fn setup(State(state): State<SharedState>, h: HeaderMap) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let t = telemetry(&h);
-    let result = (|| -> rusqlite::Result<Device> {
+    let result = (|| -> rusqlite::Result<Option<Device>> {
         let c = state.db.conn();
         let d = match model::device_by_mac(&c, &mac)? {
             Some(d) => d,
+            None if !crate::auth::new_devices_allowed(&c)? => {
+                model::log(&c, None, "warn", &format!("Refused new device {mac}: new devices are turned off"), None)?;
+                return Ok(None);
+            }
             None => {
                 let d = model::register_device(
                     &c,
@@ -74,10 +78,11 @@ async fn setup(State(state): State<SharedState>, h: HeaderMap) -> Response {
             }
         };
         model::record_telemetry(&c, d.id, &t)?;
-        Ok(d)
+        Ok(Some(d))
     })();
     match result {
-        Ok(d) => Json(json!({
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Some(d)) => Json(json!({
             "status": 200,
             "api_key": d.api_key.unwrap_or_default(),
             "friendly_id": d.friendly_id,

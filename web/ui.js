@@ -26,13 +26,20 @@ class ApiError extends Error {
 async function api(path, opts) {
   let r;
   try { r = await fetch(API + path, opts); } catch (e) { throw new ApiError(0, "the server cannot be reached"); }
+  if (r.status === 401) {
+    // Signed out, or the session ended: sign in and come back here.
+    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash);
+    throw new ApiError(401, "sign in");
+  }
   if (!r.ok) {
     const text = await r.text();
     let reason = text;
     try { reason = JSON.parse(text).error || text; } catch (e) { /* plain text */ }
     throw new ApiError(r.status, reason || `${r.status} ${r.statusText}`);
   }
-  return r.status === 204 ? null : r.json();
+  // An empty answer (204, or 201 with no body) is null.
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
 }
 function apiSend(method, path, body) {
   return api(path, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -189,9 +196,30 @@ function renderStatus() {
   setHtml(el, `<a href="/devices"><span class="dot ${dot}"></span> ${esc(text)}</a>`);
 }
 
+/// Who is signed in, with a way out; nothing while the lock is off and nobody is.
+async function showUser() {
+  const el = $("foot-user");
+  if (!el) return;
+  try {
+    const me = await api("/auth/me");
+    if (me.via === "login") {
+      el.innerHTML = `Signed in as ${esc(me.name)} <button type="button" class="link" id="sign-out">Sign out</button>`;
+      $("sign-out").onclick = async () => {
+        await apiSend("POST", "/auth/logout").catch(() => {});
+        location.href = me.locked ? "/login" : location.pathname;
+      };
+    } else if (me.via === "token") {
+      el.textContent = `Using token ${me.name}`;
+    } else {
+      el.innerHTML = `<a href="/devices#/security" title="Anyone who can reach this server can use it">No sign-in required</a>`;
+    }
+  } catch (e) { /* the status line already says */ }
+}
+
 function start({ pages, onRoute, onTick }) {
   Object.assign(App, { pages, onRoute, onTick });
   initTheme();
+  showUser();
   window.addEventListener("hashchange", showPage);
   showPage();
   setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);

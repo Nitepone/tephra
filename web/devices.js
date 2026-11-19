@@ -161,11 +161,12 @@ async function renderLog() {
 }
 
 start({
-  pages: ["devices", "log"],
+  pages: ["devices", "log", "security"],
   onRoute: () => { shownDetail = null; },
   onTick: async r => {
     if (App.status) setText("foot-server", `tephra ${App.status.version}`);
     if (r.page === "devices") { renderDeviceList(r); renderDeviceDetail(r); }
     if (r.page === "log") await renderLog();
+    if (r.page === "security") await renderSecurity();
   },
 });

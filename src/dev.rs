@@ -36,11 +36,13 @@ pub fn router() -> Router<SharedState> {
         .route_layer(middleware::from_fn(local_only))
 }
 
+/// This machine, or anyone signed in or with a token.
 async fn local_only(ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Response {
-    if peer.ip().to_canonical().is_loopback() {
+    let authenticated = req.extensions().get::<crate::auth::Access>().is_some_and(|a| a.authenticated());
+    if authenticated || peer.ip().to_canonical().is_loopback() {
         next.run(req).await
     } else {
-        let msg = "the developer API only answers requests from the machine tephra runs on";
+        let msg = "the developer API answers requests from the machine tephra runs on, or with a token";
         (StatusCode::FORBIDDEN, Json(json!({ "error": msg }))).into_response()
     }
 }
@@ -522,12 +524,7 @@ async fn save_app(State(s): State<SharedState>, headers: axum::http::HeaderMap, 
     match crate::control_api::store_app(&s, app, false) {
         Ok(out) => {
             let id = out.app.id.clone();
-            let base = if s.cfg.public_url.is_empty() {
-                let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("localhost");
-                format!("http://{host}")
-            } else {
-                s.cfg.public_url.trim_end_matches('/').to_string()
-            };
+            let base = crate::device_api::base_url(&s, &headers);
             let url = format!("{base}/#/apps/app/{}", urlencode(&id));
             Json(json!({ "ok": true, "id": id, "name": out.app.name, "url": url, "replaced": replaced, "prototype": out.app.prototype }))
                 .into_response()
@@ -536,7 +533,7 @@ async fn save_app(State(s): State<SharedState>, headers: axum::http::HeaderMap, 
     }
 }
 
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
         .collect()

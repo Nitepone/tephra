@@ -5,7 +5,20 @@ same PNG a device would get and reports, node by node, what was drawn where and 
 It's meant for scripts and coding agents that can't watch the **Try it** panel.
 
 It runs any Lua it's sent, with network access, so **it only answers requests from the machine
-tephra runs on** (`127.0.0.1` or `::1`). Anywhere else gets `403`.
+tephra runs on** (`127.0.0.1` or `::1`), **or with a token**. Anywhere else gets `403`.
+
+## Tokens
+
+**Make a link for an agent** (on the reference's front page, or **Devices › Security**) makes a token and copies
+a link to `/agent?token=…`: one Markdown page with how to use the token, this guide, this page and
+the Lua reference. Give the link to the agent. Tokens last 24 hours unless made otherwise. Send
+one on every request:
+
+    curl -s localhost:8374/api/v1/dev/fetch -H "Authorization: Bearer $TOKEN" ...
+
+or add `?token=…` to a URL. When the server requires sign-in, a token is needed from this machine
+too, and works for the rest of the API (`/api/v1`) as well. It cannot manage logins, tokens or
+the sign-in setting. A missing or expired token gets `401`.
 
 `fetch` and `render` take JSON with the app:
 

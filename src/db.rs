@@ -111,6 +111,35 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql("ALTER TABLE devices ADD COLUMN grays INTEGER NOT NULL DEFAULT 2;"),
     // 5: when an instance's fetch asked to run next.
     Migration::Sql("ALTER TABLE app_data ADD COLUMN next_fetch_ms INTEGER;"),
+    // 6: logins, their browser sessions, and access tokens (see auth.rs). Secrets are stored
+    // as their SHA-256; passwords as Argon2id.
+    Migration::Sql(r#"
+    CREATE TABLE users (
+        id            INTEGER PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        created_ms    INTEGER NOT NULL,
+        last_login_ms INTEGER
+    );
+    CREATE TABLE sessions (
+        id           INTEGER PRIMARY KEY,
+        hash         TEXT NOT NULL UNIQUE,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_ms   INTEGER NOT NULL,
+        expires_ms   INTEGER NOT NULL,
+        last_used_ms INTEGER,
+        agent        TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE tokens (
+        id           INTEGER PRIMARY KEY,
+        hash         TEXT NOT NULL UNIQUE,
+        name         TEXT NOT NULL,
+        created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_ms   INTEGER NOT NULL,
+        expires_ms   INTEGER,  -- NULL: until revoked
+        last_used_ms INTEGER
+    );
+    "#),
 ];
 
 /// Rewrites each instance's JSON settings as the equivalent Lua config.

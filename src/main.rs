@@ -11,6 +11,9 @@ struct Args {
     /// Print the effective configuration as TOML and exit.
     #[arg(long)]
     print_config: bool,
+    /// Turn off the sign-in lock (if you are locked out) and exit.
+    #[arg(long)]
+    unlock: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -26,6 +29,12 @@ fn main() -> anyhow::Result<()> {
     };
     if args.print_config {
         print!("{}", toml::to_string_pretty(&cfg)?);
+        return Ok(());
+    }
+    if args.unlock {
+        let db = tephra::db::Db::open(&cfg.db_path())?;
+        tephra::auth::set_lock(&db.conn(), false)?;
+        println!("Sign-in is no longer required. Turn it back on in Devices > Security.");
         return Ok(());
     }
     if !cfg.timezone.is_empty() {

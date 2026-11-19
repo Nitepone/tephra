@@ -17,6 +17,7 @@
   <nav aria-label="Pages">
     <a href="#/devices" data-page="devices">Devices</a>
     <a href="#/log" data-page="log">Log</a>
+    <a href="#/security" data-page="security">Security</a>
   </nav>
   <div class="status" id="status"></div>
 </header>
@@ -42,15 +43,24 @@
   <div class="page-head"><h1>Log</h1><span class="muted">Newest first. Devices upload only their errors.</span></div>
   <div class="panel"><div class="panel-body flush scroll-x" id="log-body"></div></div>
 </section>
+
+<!-- ---- Security: the sign-in lock, logins, browser sessions and access tokens (security.js) ---- -->
+<section id="page-security" hidden>
+  <div class="page-head"><h1>Security</h1></div>
+  <div id="security-body"></div>
+</section>
 </main>
 
 <footer class="foot">
   <span id="foot-server"></span>
+  <span id="foot-user"></span>
   <a href="/docs/lua/" target="_blank" rel="noopener">Lua API reference</a>
   <label>Theme <select id="theme"><option value="">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
 </footer>
 
 <script src="/static/ui.js"></script>
+<script src="/static/agent-link.js"></script>
+<script src="/static/security.js"></script>
 <script src="/static/devices.js"></script>
 </body>
 </html>

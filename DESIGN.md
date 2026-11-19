@@ -90,7 +90,7 @@ Text is drawn with a threshold, not dithered, so it stays crisp.
 `/api/v1/dev/fetch` and `/api/v1/dev/render` run app code that isn't saved, for scripts and coding
 agents: the PNG (one size or a sheet of all four), a per-node layout report flagging cut-off text
 and overflow, timings against the limits, and failures with chunk, line and traceback. They run any
-Lua with network access, so they answer only loopback clients. Documented in the Lua reference
+Lua with network access, so they answer only loopback clients or a token. Documented in the Lua reference
 ("Testing from the command line", `luadoc/dev-api.md`).
 
 ## Screens and layouts
@@ -131,6 +131,16 @@ any other, so screens can be designed before a device exists.
   seen, refresh bounds, and what a double-click of the button does (see `docs/06-special-functions.md`).
   **Add placeholder** creates a device with no hardware: a name and a panel size.
 - **Log.** Device log entries and server events (new devices, failed fetches).
+- **Security.** Whether sign-in is required, whether new devices may register, logins (name and
+  password), signed-in browsers, and access tokens. All of it is in `src/auth.rs`:
+  - Off by default. When on, every page and `/api/v1` need a session cookie or a token; the device
+    endpoints never do.
+  - Passwords are Argon2id; session cookies (30 days, HttpOnly, SameSite=Strict) and tokens are
+    32 random bytes stored as SHA-256. Changes made with a cookie must come from the same origin.
+  - Tokens (24 hours by default) are for agents: **Make a link for an agent** (the Lua reference's front page, or Security) makes one with a link
+    to `/agent?token=…`, a Markdown page with the token's use, the guide, developer API and Lua reference. Tokens can't manage
+    security, so an agent can't extend its own access.
+  - `tephra --unlock` turns sign-in off when locked out.
 - Server settings (public URL, timezone) stay in the config file for now.
 
 ## Protocol rules
@@ -152,8 +162,8 @@ The traps from `docs/10-discrepancies-and-open-questions.md` that shape the serv
 
 ## Out of scope for now
 
-Playlists and rotation, the free-grid layout, grayscale or colour panels, multiple users and
-logins (meant for LAN use, like bps), and installing apps from the UI (apps are files on disk).
+Playlists and rotation, the free-grid layout, colour panels, per-user permissions (every
+login can do everything), and installing apps from the UI (apps are files on disk).
 
 ## Milestones
 

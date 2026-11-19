@@ -39,10 +39,10 @@ pub fn router() -> Router<SharedState> {
 pub struct ApiError(pub StatusCode, pub String);
 
 impl ApiError {
-    fn bad(msg: impl Into<String>) -> Self {
+    pub(crate) fn bad(msg: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, msg.into())
     }
-    fn not_found(what: &str) -> Self {
+    pub(crate) fn not_found(what: &str) -> Self {
         Self(StatusCode::NOT_FOUND, format!("no such {what}"))
     }
 }
